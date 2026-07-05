@@ -1,11 +1,11 @@
 # Splitzy
 
-A friendly Splitwise-style bill-splitter, built as an installable PWA for a small group of real friends — flexible splitting (equal, shares, itemized, per-night hotel stays, diet/smoker/drinker-aware categories), plus friend invites and multi-device sync backed by Supabase.
+A friendly Splitwise-style bill-splitter, built as an installable PWA for a small group of real friends — flexible splitting (equal, shares, itemized, per-night hotel stays, diet/smoker/drinker-aware categories), plus admin-managed accounts and multi-device sync backed by Supabase.
 
 ## Stack
 
 - **Next.js 16** (App Router, React 19) — note this fork renames `middleware.ts` to **`proxy.ts`**; see [proxy.ts](proxy.ts)
-- **Supabase** — Postgres, Auth (passwordless email OTP), Row Level Security, Realtime
+- **Supabase** — Postgres, Auth (email + password), Row Level Security, Realtime
 - **Tailwind v4**, installed as a PWA (manifest + service worker)
 
 ## Local setup
@@ -18,13 +18,15 @@ A friendly Splitwise-style bill-splitter, built as an installable PWA for a smal
 
 2. **Create a Supabase project** at [supabase.com](https://supabase.com) (or use an existing one).
 
-3. **Run the schema.** Open the SQL editor in your Supabase project and run the whole contents of [supabase/schema.sql](supabase/schema.sql). It creates all tables, Row Level Security policies, the new-user profile trigger, and the invite-accept functions. It's idempotent — safe to re-run.
+3. **Run the schema.** Open the SQL editor in your Supabase project and run the whole contents of [supabase/schema.sql](supabase/schema.sql). It creates all tables, Row Level Security policies, and the new-user profile trigger. It's idempotent — safe to re-run.
 
-4. **Set your environment variables.** Copy the example file and fill in your project's URL + anon key (Project Settings → API in the Supabase dashboard):
+4. **Set your environment variables.** Copy the example file and fill in your project's URL, anon key, and service role key (Project Settings → API in the Supabase dashboard):
 
    ```bash
    cp .env.local.example .env.local
    ```
+
+   `SUPABASE_SERVICE_ROLE_KEY` is sensitive (bypasses Row Level Security) — server-only, never commit it, never expose it to the client. `NEXT_PUBLIC_ADMIN_EMAIL` is the one account allowed to add friends (see below).
 
 5. **Run the dev server**
 
@@ -32,17 +34,17 @@ A friendly Splitwise-style bill-splitter, built as an installable PWA for a smal
    npm run dev
    ```
 
-   Open [http://localhost:3000](http://localhost:3000). You'll land on `/login` — sign in with an email, and you'll get a 6-digit code (no password).
+   Open [http://localhost:3000](http://localhost:3000) and sign in with the admin account's email + password.
 
-## How invites work
+## How adding friends works
 
-Every group member has to be a real Splitzy account — there's no more "type a name" placeholder. To bring a friend in:
+There's no self-serve signup — every account is created by the admin (`NEXT_PUBLIC_ADMIN_EMAIL`), which avoids depending on Supabase's rate-limited shared email sender entirely.
 
-- **Friends** tab → **Invite a friend**, or **New group** → **Invite someone new**, or a group's **member list** → **Invite someone new to this group**.
-- This generates a one-time link (`/invite/{code}`), shared via the device's native share sheet (or copied to clipboard).
-- Your friend opens the link, signs in with their own email OTP, and accepting the invite connects you as friends — and joins them into the group, if the invite was group-scoped.
+- **Friends** tab → **Add a friend**, or **New group** → **Add someone new**, or a group's **member list** → **Add someone new to this group** (admin-only; enforced both in the UI and server-side in the Server Action).
+- Fill in their name, email, and a temp password — this calls the Supabase Admin API (`lib/adminActions.ts`) to create a pre-confirmed account directly, no email round-trip. They're connected as your friend immediately (and added to the group, if launched from one).
+- Tell them their email + temp password out of band (text, in person). They sign in at `/login` and can change their password anytime from **Account → Change password**, and set their own display name from **Account** (tap the name).
 
-See [lib/invites.ts](lib/invites.ts) and [supabase/schema.sql](supabase/schema.sql) (`accept_invite`, `get_invite_preview`) for the details.
+See [lib/adminActions.ts](lib/adminActions.ts) and [lib/supabase/admin.ts](lib/supabase/admin.ts) for the details.
 
 ## Install as an app
 
@@ -50,4 +52,4 @@ On your phone, open the deployed site and use your browser's **Share → Add to 
 
 ## Deploying
 
-Deploy target is [Vercel](https://vercel.com/new). Set the two `NEXT_PUBLIC_SUPABASE_*` environment variables in your Vercel project settings, matching `.env.local`.
+Deploy target is [Vercel](https://vercel.com/new). Set all four environment variables from `.env.local` in your Vercel project settings (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_ADMIN_EMAIL`) and redeploy.
