@@ -1,65 +1,133 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import Link from "next/link";
+import { useStore } from "@/lib/store";
+import { groupNet, overallNet } from "@/lib/balances";
+import { money } from "@/lib/format";
+import { Avatar, AvatarStack } from "@/components/Avatar";
+import { ButtonLink } from "@/components/Button";
+import { ThemeToggle } from "@/components/ThemeToggle";
+
+export default function HomePage() {
+  const { state, me, person } = useStore();
+  const net = overallNet(state);
+  const positive = net >= 0;
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <main className="safe-top flex flex-1 flex-col gap-6 px-5 pt-4">
+      <header className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Avatar person={me} size="md" />
+          <div>
+            <p className="text-xs font-semibold text-muted">Welcome back</p>
+            <h1 className="text-lg font-extrabold leading-tight">{me.name} 👋</h1>
+          </div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+        <ThemeToggle />
+      </header>
+
+      {/* Overall balance hero */}
+      <section className="animate-pop rounded-4xl bg-gradient-to-br from-primary to-primary-strong p-6 text-white shadow-[var(--shadow)]">
+        <p className="text-sm font-semibold text-white/80">
+          {net === 0
+            ? "You're all settled up 🎉"
+            : positive
+              ? "Overall, you are owed"
+              : "Overall, you owe"}
+        </p>
+        <p className="mt-1 text-4xl font-black tracking-tight">{money(net)}</p>
+        <div className="mt-5 flex gap-3">
+          <ButtonLink
+            href="/new"
+            variant="ghost"
+            className="!bg-white/15 !text-white backdrop-blur hover:!bg-white/25"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+            <PlusIcon /> New group
+          </ButtonLink>
         </div>
-      </main>
+      </section>
+
+      {/* Groups */}
+      <section className="flex flex-col gap-3">
+        <div className="flex items-center justify-between px-1">
+          <h2 className="text-base font-extrabold">Your groups</h2>
+          <span className="rounded-full bg-surface px-3 py-1 text-xs font-bold text-muted">
+            {state.groups.length}
+          </span>
+        </div>
+
+        {state.groups.length === 0 && <EmptyGroups />}
+
+        <ul className="flex flex-col gap-3">
+          {state.groups.map((g) => {
+            const exp = state.expenses.filter((e) => e.groupId === g.id);
+            const set = state.settlements.filter((s) => s.groupId === g.id);
+            const bal = groupNet(g, exp, set)[state.meId] ?? 0;
+            const members = g.memberIds.map(person);
+            return (
+              <li key={g.id}>
+                <Link
+                  href={`/groups/${g.id}`}
+                  className="group flex items-center gap-4 rounded-3xl border border-border bg-surface p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
+                >
+                  <span className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-surface-2 text-2xl">
+                    {g.emoji}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-extrabold">{g.name}</p>
+                    <div className="mt-1.5">
+                      <AvatarStack people={members} />
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <BalanceTag value={bal} />
+                  </div>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+    </main>
+  );
+}
+
+function BalanceTag({ value }: { value: number }) {
+  if (Math.abs(value) < 0.005)
+    return <span className="text-xs font-bold text-muted">settled</span>;
+  const owed = value > 0;
+  return (
+    <div className="flex flex-col items-end">
+      <span
+        className={`text-[11px] font-bold ${owed ? "text-positive" : "text-negative"}`}
+      >
+        {owed ? "you're owed" : "you owe"}
+      </span>
+      <span
+        className={`text-base font-black ${owed ? "text-positive" : "text-negative"}`}
+      >
+        {money(Math.abs(value))}
+      </span>
     </div>
+  );
+}
+
+function EmptyGroups() {
+  return (
+    <div className="rounded-3xl border border-dashed border-border bg-surface/60 p-8 text-center">
+      <p className="text-4xl">🫙</p>
+      <p className="mt-2 font-bold">No groups yet</p>
+      <p className="mt-1 text-sm text-muted">
+        Create a group to start splitting bills.
+      </p>
+    </div>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round">
+      <path d="M12 5v14M5 12h14" />
+    </svg>
   );
 }

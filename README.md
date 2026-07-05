@@ -1,36 +1,53 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Splitzy
 
-## Getting Started
+A friendly Splitwise-style bill-splitter, built as an installable PWA for a small group of real friends — flexible splitting (equal, shares, itemized, per-night hotel stays, diet/smoker/drinker-aware categories), plus friend invites and multi-device sync backed by Supabase.
 
-First, run the development server:
+## Stack
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+- **Next.js 16** (App Router, React 19) — note this fork renames `middleware.ts` to **`proxy.ts`**; see [proxy.ts](proxy.ts)
+- **Supabase** — Postgres, Auth (passwordless email OTP), Row Level Security, Realtime
+- **Tailwind v4**, installed as a PWA (manifest + service worker)
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Local setup
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+1. **Install dependencies**
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+   ```bash
+   npm install
+   ```
 
-## Learn More
+2. **Create a Supabase project** at [supabase.com](https://supabase.com) (or use an existing one).
 
-To learn more about Next.js, take a look at the following resources:
+3. **Run the schema.** Open the SQL editor in your Supabase project and run the whole contents of [supabase/schema.sql](supabase/schema.sql). It creates all tables, Row Level Security policies, the new-user profile trigger, and the invite-accept functions. It's idempotent — safe to re-run.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+4. **Set your environment variables.** Copy the example file and fill in your project's URL + anon key (Project Settings → API in the Supabase dashboard):
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+   ```bash
+   cp .env.local.example .env.local
+   ```
 
-## Deploy on Vercel
+5. **Run the dev server**
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+   ```bash
+   npm run dev
+   ```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+   Open [http://localhost:3000](http://localhost:3000). You'll land on `/login` — sign in with an email, and you'll get a 6-digit code (no password).
+
+## How invites work
+
+Every group member has to be a real Splitzy account — there's no more "type a name" placeholder. To bring a friend in:
+
+- **Friends** tab → **Invite a friend**, or **New group** → **Invite someone new**, or a group's **member list** → **Invite someone new to this group**.
+- This generates a one-time link (`/invite/{code}`), shared via the device's native share sheet (or copied to clipboard).
+- Your friend opens the link, signs in with their own email OTP, and accepting the invite connects you as friends — and joins them into the group, if the invite was group-scoped.
+
+See [lib/invites.ts](lib/invites.ts) and [supabase/schema.sql](supabase/schema.sql) (`accept_invite`, `get_invite_preview`) for the details.
+
+## Install as an app
+
+On your phone, open the deployed site and use your browser's **Share → Add to Home Screen** for a full-screen, installable experience (see `public/manifest.webmanifest`).
+
+## Deploying
+
+Deploy target is [Vercel](https://vercel.com/new). Set the two `NEXT_PUBLIC_SUPABASE_*` environment variables in your Vercel project settings, matching `.env.local`.
