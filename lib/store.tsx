@@ -137,12 +137,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     for (const row of (memberships ?? []) as unknown as { group: Record<string, unknown> | null }[]) {
       const g = row.group;
       if (!g) continue;
-      const groupStays = g.group_stays as Array<{
+      // group_stays.group_id is a primary key (strict 1:1), so PostgREST
+      // embeds it as a single object (or null) — not an array like the
+      // other one-to-many embeds below.
+      const groupStay = g.group_stays as {
         check_in: string;
         check_out: string;
         price: number;
         paid_by: string;
-      }>;
+      } | null;
       const staysRows = g.stays as Array<{ person_id: string; from: string; to: string }>;
 
       groups.push({
@@ -151,13 +154,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         emoji: g.emoji as string,
         memberIds: (g.group_members as Array<{ person_id: string }>).map((m) => m.person_id),
         createdAt: new Date(g.created_at as string).getTime(),
-        ...(groupStays?.[0]
+        ...(groupStay
           ? {
               stay: {
-                checkIn: groupStays[0].check_in,
-                checkOut: groupStays[0].check_out,
-                price: Number(groupStays[0].price),
-                paidBy: groupStays[0].paid_by,
+                checkIn: groupStay.check_in,
+                checkOut: groupStay.check_out,
+                price: Number(groupStay.price),
+                paidBy: groupStay.paid_by,
                 stays: staysRows.map((s) => ({
                   personId: s.person_id,
                   from: s.from,
