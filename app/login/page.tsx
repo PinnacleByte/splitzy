@@ -1,46 +1,31 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/Button";
-import { requestOtp, verifyOtp } from "./actions";
+import { requestOtp } from "./actions";
 
 function LoginForm() {
-  const router = useRouter();
   const params = useSearchParams();
   const redirectTo = params.get("redirect") || "/";
+  const linkFailed = params.get("error") === "invalid-link";
 
-  const [step, setStep] = useState<"email" | "code">("email");
+  const [sent, setSent] = useState(false);
   const [email, setEmail] = useState("");
-  const [code, setCode] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const sendCode = async () => {
+  const sendLink = async () => {
     const e = email.trim();
     if (!e) return;
     setPending(true);
     setError(null);
     try {
-      await requestOtp(e);
-      setStep("code");
+      const confirmUrl = `${window.location.origin}/auth/confirm?next=${encodeURIComponent(redirectTo)}`;
+      await requestOtp(e, confirmUrl);
+      setSent(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
-    } finally {
-      setPending(false);
-    }
-  };
-
-  const confirmCode = async () => {
-    if (code.trim().length < 6) return;
-    setPending(true);
-    setError(null);
-    try {
-      await verifyOtp(email.trim(), code.trim());
-      router.push(redirectTo);
-      router.refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Invalid code");
     } finally {
       setPending(false);
     }
@@ -56,8 +41,28 @@ function LoginForm() {
         </p>
       </div>
 
-      {step === "email" ? (
+      {sent ? (
+        <div className="flex w-full max-w-xs flex-col gap-2">
+          <p className="text-4xl">📬</p>
+          <p className="font-bold">Check your email</p>
+          <p className="text-sm font-semibold text-muted">
+            We sent a sign-in link to <span className="text-foreground">{email}</span> — open
+            it on this device to continue.
+          </p>
+          <button
+            onClick={() => setSent(false)}
+            className="mt-2 text-sm font-bold text-muted active:scale-95"
+          >
+            Use a different email
+          </button>
+        </div>
+      ) : (
         <div className="flex w-full max-w-xs flex-col gap-3">
+          {linkFailed && (
+            <p className="text-sm font-bold text-negative">
+              That link expired or was already used — send a new one.
+            </p>
+          )}
           <input
             autoFocus
             type="email"
@@ -65,41 +70,12 @@ function LoginForm() {
             placeholder="you@email.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && sendCode()}
+            onKeyDown={(e) => e.key === "Enter" && sendLink()}
             className="w-full rounded-3xl border border-border bg-surface px-5 py-4 text-center font-bold outline-none placeholder:font-semibold placeholder:text-muted focus:border-primary"
           />
-          <Button onClick={sendCode} disabled={pending || !email.trim()} size="lg" fullWidth>
-            {pending ? "Sending…" : "Send me a code"}
+          <Button onClick={sendLink} disabled={pending || !email.trim()} size="lg" fullWidth>
+            {pending ? "Sending…" : "Send me a sign-in link"}
           </Button>
-        </div>
-      ) : (
-        <div className="flex w-full max-w-xs flex-col gap-3">
-          <p className="text-sm font-semibold text-muted">
-            Enter the 6-digit code sent to{" "}
-            <span className="font-bold text-foreground">{email}</span>
-          </p>
-          <input
-            autoFocus
-            inputMode="numeric"
-            placeholder="123456"
-            value={code}
-            onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-            onKeyDown={(e) => e.key === "Enter" && confirmCode()}
-            className="w-full rounded-3xl border border-border bg-surface px-5 py-4 text-center text-2xl font-black tracking-[0.3em] outline-none placeholder:text-border focus:border-primary"
-          />
-          <Button onClick={confirmCode} disabled={pending || code.length < 6} size="lg" fullWidth>
-            {pending ? "Checking…" : "Continue"}
-          </Button>
-          <button
-            onClick={() => {
-              setStep("email");
-              setCode("");
-              setError(null);
-            }}
-            className="text-sm font-bold text-muted active:scale-95"
-          >
-            Use a different email
-          </button>
         </div>
       )}
 

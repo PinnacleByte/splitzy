@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 // Next.js 16 renamed the `middleware.ts` convention to `proxy.ts` — same job,
 // same execution point (runs before every matched route below).
-const PUBLIC_PATHS = ["/login", "/invite"];
+const PUBLIC_PATHS = ["/login", "/invite", "/auth"];
 
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });
