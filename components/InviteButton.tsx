@@ -17,27 +17,33 @@ export function InviteButton({
   const [pending, setPending] = useState(false);
   const [link, setLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const invite = async () => {
     setPending(true);
     setLink(null);
-    try {
-      const code = await createInvite(groupId);
-      const url = `${window.location.origin}/invite/${code}`;
-      if (navigator.share) {
+    setError(null);
+    const result = await createInvite(groupId);
+    if (result.error || !result.code) {
+      setError(result.error ?? "Something went wrong");
+      setPending(false);
+      return;
+    }
+    const url = `${window.location.origin}/invite/${result.code}`;
+    if (navigator.share) {
+      try {
         await navigator.share({
           title: "Join me on Splitzy",
           text: "Split bills with me on Splitzy",
           url,
         });
-      } else {
-        setLink(url);
+      } catch {
+        // share sheet was dismissed — not an error
       }
-    } catch {
-      // share sheet was dismissed, or invite creation failed — nothing to do
-    } finally {
-      setPending(false);
+    } else {
+      setLink(url);
     }
+    setPending(false);
   };
 
   const copy = async () => {
@@ -63,6 +69,7 @@ export function InviteButton({
           </button>
         </div>
       )}
+      {error && <p className="mt-2 text-xs font-bold text-negative">{error}</p>}
     </div>
   );
 }

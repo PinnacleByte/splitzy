@@ -8,5 +8,8 @@ export async function requestOtp(email: string, redirectTo: string) {
     email,
     options: { shouldCreateUser: true, emailRedirectTo: redirectTo },
   });
-  if (error) throw new Error(error.message);
+  // Return errors as data rather than throwing — Next.js redacts thrown
+  // Server Action errors to a generic message in production builds, which
+  // would hide useful signals like Supabase's rate-limit responses.
+  return { error: error?.message ?? null };
 }

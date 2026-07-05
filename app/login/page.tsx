@@ -20,15 +20,11 @@ function LoginForm() {
     if (!e) return;
     setPending(true);
     setError(null);
-    try {
-      const confirmUrl = `${window.location.origin}/auth/confirm?next=${encodeURIComponent(redirectTo)}`;
-      await requestOtp(e, confirmUrl);
-      setSent(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
-    } finally {
-      setPending(false);
-    }
+    const confirmUrl = `${window.location.origin}/auth/confirm?next=${encodeURIComponent(redirectTo)}`;
+    const result = await requestOtp(e, confirmUrl);
+    if (result.error) setError(result.error);
+    else setSent(true);
+    setPending(false);
   };
 
   return (

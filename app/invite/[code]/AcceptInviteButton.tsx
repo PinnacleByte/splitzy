@@ -14,24 +14,25 @@ export function AcceptInviteButton({ code }: { code: string }) {
   const onClick = async () => {
     setPending(true);
     setError(null);
-    try {
-      const supabase = createClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
 
-      if (!user) {
-        router.push(`/login?redirect=${encodeURIComponent(`/invite/${code}`)}`);
-        return;
-      }
+    const supabase = createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-      const result = await acceptInvite(code);
-      router.push(result.group_id ? `/groups/${result.group_id}` : "/friends");
-      router.refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
-      setPending(false);
+    if (!user) {
+      router.push(`/login?redirect=${encodeURIComponent(`/invite/${code}`)}`);
+      return;
     }
+
+    const result = await acceptInvite(code);
+    if (result.error || !result.data) {
+      setError(result.error ?? "Something went wrong");
+      setPending(false);
+      return;
+    }
+    router.push(result.data.group_id ? `/groups/${result.data.group_id}` : "/friends");
+    router.refresh();
   };
 
   return (
