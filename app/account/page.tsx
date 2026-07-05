@@ -12,7 +12,7 @@ import { useTheme } from "@/lib/theme";
 import { createClient } from "@/lib/supabase/client";
 
 export default function AccountPage() {
-  const { state, me, toggleTag, updateMyProfile } = useStore();
+  const { state, me, toggleTag, updateMyProfile, signOut: storeSignOut } = useStore();
   const { theme, toggle } = useTheme();
   const router = useRouter();
   const net = overallNet(state);
@@ -47,10 +47,8 @@ export default function AccountPage() {
   };
 
   const signOut = async () => {
-    const supabase = createClient();
-    await supabase.auth.signOut();
+    await storeSignOut();
     router.push("/login");
-    router.refresh();
   };
 
   return (

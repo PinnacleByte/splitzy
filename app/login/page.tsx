@@ -3,12 +3,13 @@
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/Button";
-import { signIn } from "./actions";
+import { useStore } from "@/lib/store";
 
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
   const redirectTo = params.get("redirect") || "/";
+  const { signIn } = useStore();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -26,7 +27,6 @@ function LoginForm() {
       return;
     }
     router.push(redirectTo);
-    router.refresh();
   };
 
   return (

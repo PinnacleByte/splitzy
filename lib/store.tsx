@@ -42,6 +42,10 @@ type Store = {
   hydrated: boolean;
   me: Person;
   person: (id: string) => Person;
+  /** signs in on the same client instance the rest of the app reads from,
+   * so state repopulates immediately instead of needing a hard refresh */
+  signIn: (email: string, password: string) => Promise<{ error: string | null }>;
+  signOut: () => Promise<void>;
   addGroup: (data: {
     name: string;
     emoji: string;
@@ -238,6 +242,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         color: "from-slate-400 to-slate-500",
         tags: [],
       };
+
+    const signIn: Store["signIn"] = async (email, password) => {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (!error) await load();
+      return { error: error?.message ?? null };
+    };
+
+    const signOut: Store["signOut"] = async () => {
+      await supabase.auth.signOut();
+      setState(EMPTY_STATE);
+    };
 
     const addGroup: Store["addGroup"] = ({ name, emoji, memberIds, stay }) => {
       const id = crypto.randomUUID();
@@ -487,6 +502,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       hydrated,
       me: person(state.meId),
       person,
+      signIn,
+      signOut,
       addGroup,
       toggleTag,
       updateMyProfile,
@@ -499,7 +516,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       deleteExpense,
       deleteGroup,
     };
-  }, [state, hydrated, supabase]);
+  }, [state, hydrated, supabase, load]);
 
   return <StoreContext.Provider value={store}>{children}</StoreContext.Provider>;
 }
