@@ -165,6 +165,23 @@ as $$
   );
 $$;
 
+-- security definer for the same reason as is_group_member: a plain inline
+-- subquery against `groups` here would be subject to groups_select's own
+-- RLS (is_group_member), which is false for a brand-new group that has no
+-- group_members row yet — a chicken-and-egg failure that silently blocked
+-- the creator from ever adding themselves as the first member.
+create or replace function is_group_creator(gid uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from groups where id = gid and created_by = auth.uid()
+  );
+$$;
+
 -- =========================================================================
 -- Row level security
 -- =========================================================================
@@ -234,9 +251,7 @@ create policy "group_members_select" on group_members for select
 drop policy if exists "group_members_insert" on group_members;
 create policy "group_members_insert" on group_members for insert
   with check (
-    (person_id = auth.uid() and exists (
-      select 1 from groups g where g.id = group_id and g.created_by = auth.uid()
-    ))
+    (person_id = auth.uid() and is_group_creator(group_id))
     or (is_group_member(group_id) and is_connected(person_id))
   );
 

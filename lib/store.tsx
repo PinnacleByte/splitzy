@@ -36,6 +36,12 @@ const toPerson = (row: ProfileRow): Person => ({
   tags: row.tags ?? [],
 });
 
+/** Supabase calls resolve (not reject) on RLS/DB errors — throw explicitly
+ * so multi-step writes stop instead of silently continuing past a failure. */
+function unwrap({ error }: { error: { message: string } | null }): void {
+  if (error) throw new Error(error.message);
+}
+
 type Store = {
   state: AppState;
   /** true once the initial auth check + data load has finished */
@@ -268,32 +274,40 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setState((s) => ({ ...s, groups: [group, ...s.groups] }));
 
       (async () => {
-        await supabase.from("groups").insert({ id, name, emoji, created_by: state.meId });
-        await supabase.from("group_members").insert({ group_id: id, person_id: state.meId });
+        unwrap(await supabase.from("groups").insert({ id, name, emoji, created_by: state.meId }));
+        unwrap(
+          await supabase.from("group_members").insert({ group_id: id, person_id: state.meId }),
+        );
         const others = allMemberIds.filter((pid) => pid !== state.meId);
         if (others.length) {
-          await supabase
-            .from("group_members")
-            .insert(others.map((person_id) => ({ group_id: id, person_id })));
-        }
-        if (stay) {
-          await supabase.from("group_stays").insert({
-            group_id: id,
-            check_in: stay.checkIn,
-            check_out: stay.checkOut,
-            price: stay.price,
-            paid_by: stay.paidBy,
-          });
-          await supabase.from("stays").insert(
-            stay.stays.map((s) => ({
-              group_id: id,
-              person_id: s.personId,
-              from: s.from,
-              to: s.to,
-            })),
+          unwrap(
+            await supabase
+              .from("group_members")
+              .insert(others.map((person_id) => ({ group_id: id, person_id }))),
           );
         }
-      })().catch(console.error);
+        if (stay) {
+          unwrap(
+            await supabase.from("group_stays").insert({
+              group_id: id,
+              check_in: stay.checkIn,
+              check_out: stay.checkOut,
+              price: stay.price,
+              paid_by: stay.paidBy,
+            }),
+          );
+          unwrap(
+            await supabase.from("stays").insert(
+              stay.stays.map((s) => ({
+                group_id: id,
+                person_id: s.personId,
+                from: s.from,
+                to: s.to,
+              })),
+            ),
+          );
+        }
+      })().catch((err) => console.error("addGroup failed to persist:", err));
 
       return group;
     };
@@ -319,18 +333,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }));
 
       (async () => {
-        await supabase.from("group_members").insert({ group_id: groupId, person_id: personId });
+        unwrap(
+          await supabase.from("group_members").insert({ group_id: groupId, person_id: personId }),
+        );
         const group = state.groups.find((g) => g.id === groupId);
         if (group?.stay) {
           const dates = stayDates ?? { from: group.stay.checkIn, to: group.stay.checkOut };
-          await supabase
-            .from("stays")
-            .upsert(
-              { group_id: groupId, person_id: personId, from: dates.from, to: dates.to },
-              { onConflict: "group_id,person_id" },
-            );
+          unwrap(
+            await supabase
+              .from("stays")
+              .upsert(
+                { group_id: groupId, person_id: personId, from: dates.from, to: dates.to },
+                { onConflict: "group_id,person_id" },
+              ),
+          );
         }
-      })().catch(console.error);
+      })().catch((err) => console.error("addMemberToGroup failed to persist:", err));
     };
 
     const updateStay: Store["updateStay"] = (groupId, patch) => {
@@ -412,20 +430,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setState((s) => ({ ...s, expenses: [e, ...s.expenses] }));
 
       (async () => {
-        await supabase.from("expenses").insert({
-          id: e.id,
-          group_id: e.groupId,
-          description: e.description,
-          emoji: e.emoji,
-          amount: e.amount,
-          paid_by: e.paidBy,
-          config: e.config,
-          category: e.category ?? null,
-        });
-        await supabase.from("expense_splits").insert(
-          e.splits.map((s) => ({ expense_id: e.id, person_id: s.personId, amount: s.amount })),
+        unwrap(
+          await supabase.from("expenses").insert({
+            id: e.id,
+            group_id: e.groupId,
+            description: e.description,
+            emoji: e.emoji,
+            amount: e.amount,
+            paid_by: e.paidBy,
+            config: e.config,
+            category: e.category ?? null,
+          }),
         );
-      })().catch(console.error);
+        unwrap(
+          await supabase.from("expense_splits").insert(
+            e.splits.map((s) => ({ expense_id: e.id, person_id: s.personId, amount: s.amount })),
+          ),
+        );
+      })().catch((err) => console.error("addExpense failed to persist:", err));
 
       return e;
     };
@@ -437,23 +459,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }));
 
       (async () => {
-        await supabase
-          .from("expenses")
-          .update({
-            group_id: data.groupId,
-            description: data.description,
-            emoji: data.emoji,
-            amount: data.amount,
-            paid_by: data.paidBy,
-            config: data.config,
-            category: data.category ?? null,
-          })
-          .eq("id", id);
-        await supabase.from("expense_splits").delete().eq("expense_id", id);
-        await supabase.from("expense_splits").insert(
-          data.splits.map((s) => ({ expense_id: id, person_id: s.personId, amount: s.amount })),
+        unwrap(
+          await supabase
+            .from("expenses")
+            .update({
+              group_id: data.groupId,
+              description: data.description,
+              emoji: data.emoji,
+              amount: data.amount,
+              paid_by: data.paidBy,
+              config: data.config,
+              category: data.category ?? null,
+            })
+            .eq("id", id),
         );
-      })().catch(console.error);
+        unwrap(await supabase.from("expense_splits").delete().eq("expense_id", id));
+        unwrap(
+          await supabase.from("expense_splits").insert(
+            data.splits.map((s) => ({ expense_id: id, person_id: s.personId, amount: s.amount })),
+          ),
+        );
+      })().catch((err) => console.error("updateExpense failed to persist:", err));
     };
 
     const addSettlement: Store["addSettlement"] = (data) => {
