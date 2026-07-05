@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useStore } from "@/lib/store";
@@ -11,10 +12,39 @@ import { useTheme } from "@/lib/theme";
 import { createClient } from "@/lib/supabase/client";
 
 export default function AccountPage() {
-  const { state, me, toggleTag } = useStore();
+  const { state, me, toggleTag, updateMyProfile } = useStore();
   const { theme, toggle } = useTheme();
   const router = useRouter();
   const net = overallNet(state);
+
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(me.name);
+
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [pwPending, setPwPending] = useState(false);
+  const [pwMessage, setPwMessage] = useState<string | null>(null);
+
+  const saveName = () => {
+    const trimmed = nameDraft.trim();
+    if (trimmed && trimmed !== me.name) updateMyProfile({ name: trimmed });
+    setEditingName(false);
+  };
+
+  const savePassword = async () => {
+    if (newPassword.length < 6) return;
+    setPwPending(true);
+    setPwMessage(null);
+    const supabase = createClient();
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    setPwPending(false);
+    if (error) {
+      setPwMessage(error.message);
+      return;
+    }
+    setPwMessage("Password updated.");
+    setNewPassword("");
+  };
 
   const signOut = async () => {
     const supabase = createClient();
@@ -30,7 +60,33 @@ export default function AccountPage() {
       <section className="flex flex-col items-center gap-3 rounded-4xl border border-border bg-surface p-6 shadow-sm">
         <Avatar person={me} size="lg" />
         <div className="text-center">
-          <p className="text-lg font-extrabold">{me.name}</p>
+          {editingName ? (
+            <div className="flex items-center gap-2">
+              <input
+                autoFocus
+                value={nameDraft}
+                onChange={(e) => setNameDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && saveName()}
+                className="rounded-full bg-surface-2 px-3 py-1 text-center text-lg font-extrabold outline-none"
+              />
+              <button
+                onClick={saveName}
+                className="rounded-full bg-primary-soft px-3 py-1 text-xs font-bold text-primary active:scale-95"
+              >
+                Save
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => {
+                setNameDraft(me.name);
+                setEditingName(true);
+              }}
+              className="text-lg font-extrabold active:scale-95"
+            >
+              {me.name} <span className="text-sm text-muted">✏️</span>
+            </button>
+          )}
           <p className="text-sm font-semibold text-muted">
             {net >= 0 ? "You are owed " : "You owe "}
             <span
@@ -55,6 +111,34 @@ export default function AccountPage() {
           onClick={toggle}
           icon="🌗"
         />
+        <Row
+          label="Change password"
+          value=""
+          icon="🔑"
+          onClick={() => setChangingPassword((v) => !v)}
+        />
+        {changingPassword && (
+          <div className="flex flex-col gap-2 rounded-3xl border border-border bg-surface p-4 shadow-sm">
+            <input
+              type="password"
+              placeholder="New password (min 6 chars)"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && savePassword()}
+              className="rounded-full bg-surface-2 px-4 py-2 text-sm font-bold outline-none placeholder:font-semibold placeholder:text-muted"
+            />
+            {pwMessage && (
+              <p className="text-xs font-bold text-muted">{pwMessage}</p>
+            )}
+            <button
+              onClick={savePassword}
+              disabled={pwPending || newPassword.length < 6}
+              className="rounded-2xl bg-primary-soft py-2.5 text-center text-sm font-bold text-primary disabled:opacity-50 active:scale-[0.99]"
+            >
+              {pwPending ? "Saving…" : "Save new password"}
+            </button>
+          </div>
+        )}
         <Row
           label="Sign out"
           value=""

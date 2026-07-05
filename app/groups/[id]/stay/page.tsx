@@ -8,7 +8,7 @@ import { money } from "@/lib/format";
 import type { Group } from "@/lib/types";
 import { Avatar } from "@/components/Avatar";
 import { Button, ButtonLink } from "@/components/Button";
-import { InviteButton } from "@/components/InviteButton";
+import { AddFriendForm } from "@/components/AddFriendForm";
 import { DateField } from "@/components/inputs";
 import { Loading, NotFound } from "@/components/Screen";
 
@@ -49,6 +49,7 @@ function StayEditor({ group }: { group: Group }) {
     };
 
   const available = state.people.filter((p) => !group.memberIds.includes(p.id));
+  const isAdmin = state.meEmail === process.env.NEXT_PUBLIC_ADMIN_EMAIL;
 
   const commitPrice = (v: string) => {
     setPriceText(v);
@@ -164,7 +165,9 @@ function StayEditor({ group }: { group: Group }) {
                   ))}
                 </div>
               )}
-              <InviteButton groupId={group.id} label="Invite someone new to this trip" />
+              {isAdmin && (
+                <AddFriendForm groupId={group.id} label="Add someone new to this trip" />
+              )}
             </div>
           )}
 

@@ -103,6 +103,7 @@ export type Group = {
 export type AppState = {
   /** the current user's person id */
   meId: string;
+  meEmail: string;
   people: Person[];
   groups: Group[];
   expenses: Expense[];

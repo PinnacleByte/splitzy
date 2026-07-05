@@ -2,14 +2,8 @@
 
 import { createClient } from "@/lib/supabase/server";
 
-export async function requestOtp(email: string, redirectTo: string) {
+export async function signIn(email: string, password: string): Promise<{ error: string | null }> {
   const supabase = await createClient();
-  const { error } = await supabase.auth.signInWithOtp({
-    email,
-    options: { shouldCreateUser: true, emailRedirectTo: redirectTo },
-  });
-  // Return errors as data rather than throwing — Next.js redacts thrown
-  // Server Action errors to a generic message in production builds, which
-  // would hide useful signals like Supabase's rate-limit responses.
+  const { error } = await supabase.auth.signInWithPassword({ email, password });
   return { error: error?.message ?? null };
 }

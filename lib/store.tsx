@@ -21,6 +21,7 @@ import { createClient } from "./supabase/client";
 
 const EMPTY_STATE: AppState = {
   meId: "",
+  meEmail: "",
   people: [],
   groups: [],
   expenses: [],
@@ -48,6 +49,8 @@ type Store = {
     stay?: GroupStay;
   }) => Group;
   toggleTag: (personId: string, tag: string) => void;
+  /** edit your own display name */
+  updateMyProfile: (patch: { name?: string }) => void;
   /** add a person (an existing connection) to a group; for staying groups, give them a presence window */
   addMemberToGroup: (
     groupId: string,
@@ -185,7 +188,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    setState({ meId: user.id, people, groups, expenses, settlements });
+    setState({ meId: user.id, meEmail: user.email ?? "", people, groups, expenses, settlements });
     setHydrated(true);
   }, [supabase]);
 
@@ -376,6 +379,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         .then(({ error }) => error && console.error(error));
     };
 
+    const updateMyProfile: Store["updateMyProfile"] = (patch) => {
+      setState((s) => ({
+        ...s,
+        people: s.people.map((p) => (p.id === s.meId ? { ...p, ...patch } : p)),
+      }));
+
+      supabase
+        .from("profiles")
+        .update(patch)
+        .eq("id", state.meId)
+        .then(({ error }) => error && console.error(error));
+    };
+
     const addExpense: Store["addExpense"] = (data) => {
       const e: Expense = { ...data, id: crypto.randomUUID(), createdAt: Date.now() };
       setState((s) => ({ ...s, expenses: [e, ...s.expenses] }));
@@ -473,6 +489,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       person,
       addGroup,
       toggleTag,
+      updateMyProfile,
       addMemberToGroup,
       updateStay,
       setMemberStay,

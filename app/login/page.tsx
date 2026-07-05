@@ -1,30 +1,32 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/Button";
-import { requestOtp } from "./actions";
+import { signIn } from "./actions";
 
 function LoginForm() {
+  const router = useRouter();
   const params = useSearchParams();
   const redirectTo = params.get("redirect") || "/";
-  const linkFailed = params.get("error") === "invalid-link";
 
-  const [sent, setSent] = useState(false);
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const sendLink = async () => {
-    const e = email.trim();
-    if (!e) return;
+  const submit = async () => {
+    if (!email.trim() || !password) return;
     setPending(true);
     setError(null);
-    const confirmUrl = `${window.location.origin}/auth/confirm?next=${encodeURIComponent(redirectTo)}`;
-    const result = await requestOtp(e, confirmUrl);
-    if (result.error) setError(result.error);
-    else setSent(true);
-    setPending(false);
+    const result = await signIn(email.trim(), password);
+    if (result.error) {
+      setError(result.error);
+      setPending(false);
+      return;
+    }
+    router.push(redirectTo);
+    router.refresh();
   };
 
   return (
@@ -37,43 +39,32 @@ function LoginForm() {
         </p>
       </div>
 
-      {sent ? (
-        <div className="flex w-full max-w-xs flex-col gap-2">
-          <p className="text-4xl">📬</p>
-          <p className="font-bold">Check your email</p>
-          <p className="text-sm font-semibold text-muted">
-            We sent a sign-in link to <span className="text-foreground">{email}</span> — open
-            it on this device to continue.
-          </p>
-          <button
-            onClick={() => setSent(false)}
-            className="mt-2 text-sm font-bold text-muted active:scale-95"
-          >
-            Use a different email
-          </button>
-        </div>
-      ) : (
-        <div className="flex w-full max-w-xs flex-col gap-3">
-          {linkFailed && (
-            <p className="text-sm font-bold text-negative">
-              That link expired or was already used — send a new one.
-            </p>
-          )}
-          <input
-            autoFocus
-            type="email"
-            inputMode="email"
-            placeholder="you@email.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && sendLink()}
-            className="w-full rounded-3xl border border-border bg-surface px-5 py-4 text-center font-bold outline-none placeholder:font-semibold placeholder:text-muted focus:border-primary"
-          />
-          <Button onClick={sendLink} disabled={pending || !email.trim()} size="lg" fullWidth>
-            {pending ? "Sending…" : "Send me a sign-in link"}
-          </Button>
-        </div>
-      )}
+      <div className="flex w-full max-w-xs flex-col gap-3">
+        <input
+          autoFocus
+          type="email"
+          inputMode="email"
+          placeholder="you@email.com"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+          className="w-full rounded-3xl border border-border bg-surface px-5 py-4 text-center font-bold outline-none placeholder:font-semibold placeholder:text-muted focus:border-primary"
+        />
+        <input
+          type="password"
+          placeholder="Password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+          className="w-full rounded-3xl border border-border bg-surface px-5 py-4 text-center font-bold outline-none placeholder:font-semibold placeholder:text-muted focus:border-primary"
+        />
+        <Button onClick={submit} disabled={pending || !email.trim() || !password} size="lg" fullWidth>
+          {pending ? "Signing in…" : "Sign in"}
+        </Button>
+        <p className="text-xs font-semibold text-muted">
+          Don&apos;t have an account? Ask whoever invited you to Splitzy to add you.
+        </p>
+      </div>
 
       {error && <p className="text-sm font-bold text-negative">{error}</p>}
     </main>

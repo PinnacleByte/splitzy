@@ -7,7 +7,7 @@ import { computeNights, nightsBetween } from "@/lib/split";
 import { money } from "@/lib/format";
 import { Avatar } from "@/components/Avatar";
 import { Button } from "@/components/Button";
-import { InviteButton } from "@/components/InviteButton";
+import { AddFriendForm } from "@/components/AddFriendForm";
 import { DateField, PriceInput } from "@/components/inputs";
 
 const GROUP_EMOJIS = ["🏖️", "🏨", "🏠", "✈️", "🎉", "⛰️", "🏀", "🎓", "💼", "🚗", "🍻", "🎁"];
@@ -34,6 +34,7 @@ export default function NewGroupWizard() {
 
   const memberIds = useMemo(() => [state.meId, ...selected], [state.meId, selected]);
   const others = state.people.filter((p) => p.id !== state.meId);
+  const isAdmin = state.meEmail === process.env.NEXT_PUBLIC_ADMIN_EMAIL;
   const priceNum = parseFloat(price) || 0;
   const maxStep = isStay ? 5 : 3;
 
@@ -162,13 +163,15 @@ export default function NewGroupWizard() {
                 </button>
               );
             })}
-            <div className="mt-1 rounded-2xl border border-dashed border-border bg-surface/50 p-2">
-              <InviteButton label="Invite someone new" />
-              <p className="mt-2 px-1 text-xs font-semibold text-muted">
-                They&apos;ll join your friends list once they accept — add them to this
-                group afterward.
-              </p>
-            </div>
+            {isAdmin && (
+              <div className="mt-1 rounded-2xl border border-dashed border-border bg-surface/50 p-2">
+                <AddFriendForm label="Add someone new" />
+                <p className="mt-2 px-1 text-xs font-semibold text-muted">
+                  They&apos;ll join your friends list right away — add them to this group
+                  afterward.
+                </p>
+              </div>
+            )}
           </section>
         )}
 

@@ -21,6 +21,7 @@ function mk(
 
 export const seedState: AppState = {
   meId: you,
+  meEmail: "you@example.com",
   people: [
     { id: you, name: "You", color: "from-violet-500 to-fuchsia-500", tags: ["non-veg", "drinker"] },
     { id: alex, name: "Alex", color: "from-sky-400 to-cyan-400", tags: ["non-veg", "drinker"] },

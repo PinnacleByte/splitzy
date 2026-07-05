@@ -6,11 +6,12 @@ import { friendNet } from "@/lib/balances";
 import { money } from "@/lib/format";
 import { SUGGESTED_TAGS, tagEmoji, tagLabel } from "@/lib/tags";
 import { Avatar } from "@/components/Avatar";
-import { InviteButton } from "@/components/InviteButton";
+import { AddFriendForm } from "@/components/AddFriendForm";
 
 export default function FriendsPage() {
-  const { state, person, toggleTag } = useStore();
+  const { state, toggleTag } = useStore();
   const [open, setOpen] = useState<string | null>(null);
+  const isAdmin = state.meEmail === process.env.NEXT_PUBLIC_ADMIN_EMAIL;
 
   const friends = state.people
     .filter((p) => p.id !== state.meId)
@@ -24,7 +25,7 @@ export default function FriendsPage() {
     <main className="safe-top flex flex-1 flex-col gap-5 px-5 pt-4">
       <h1 className="text-2xl font-black">Friends</h1>
 
-      <InviteButton />
+      {isAdmin && <AddFriendForm />}
 
       {/* summary */}
       <section className="grid grid-cols-2 gap-3">
@@ -42,7 +43,11 @@ export default function FriendsPage() {
         <div className="rounded-3xl border border-dashed border-border bg-surface/60 p-8 text-center">
           <p className="text-4xl">🧑‍🤝‍🧑</p>
           <p className="mt-2 font-bold">No friends yet</p>
-          <p className="mt-1 text-sm text-muted">Send an invite link above to bring them onto Splitzy.</p>
+          <p className="mt-1 text-sm text-muted">
+            {isAdmin
+              ? "Add one above to bring them onto Splitzy."
+              : "Ask the admin to add your friends to Splitzy."}
+          </p>
         </div>
       ) : (
         <ul className="flex flex-col gap-3">
