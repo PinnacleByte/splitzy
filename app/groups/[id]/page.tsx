@@ -4,10 +4,10 @@ import { useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useStore } from "@/lib/store";
-import { groupNet, simplifyDebts } from "@/lib/balances";
+import { groupNet, simplifyDebts, grossFlows, groupStats } from "@/lib/balances";
 import { computeNights, describeSplit, METHOD_EMOJI, nightsBetween } from "@/lib/split";
 import { money, relativeTime } from "@/lib/format";
-import type { Group } from "@/lib/types";
+import type { Group, Expense, Settlement } from "@/lib/types";
 import { Avatar, AvatarStack } from "@/components/Avatar";
 import { ButtonLink } from "@/components/Button";
 import { AddFriendForm } from "@/components/AddFriendForm";
@@ -142,7 +142,13 @@ export default function GroupPage() {
         {tab === "expenses" ? (
           <ExpensesTab groupId={id} />
         ) : (
-          <BalancesTab groupId={id} net={net} />
+          <BalancesTab
+            groupId={id}
+            group={group}
+            expenses={expenses}
+            settlements={settlements}
+            net={net}
+          />
         )}
       </div>
 
@@ -334,46 +340,89 @@ function ExpensesTab({ groupId }: { groupId: string }) {
 
 function BalancesTab({
   groupId,
+  group,
+  expenses,
+  settlements,
   net,
 }: {
   groupId: string;
+  group: Group;
+  expenses: Expense[];
+  settlements: Settlement[];
   net: Record<string, number>;
 }) {
   const { state, person } = useStore();
-  const transfers = simplifyDebts(net);
+  const [autoBalance, setAutoBalance] = useState(true);
+
+  const simplified = simplifyDebts(net);
+  const gross = grossFlows(group, expenses, settlements);
+  const flows = autoBalance ? simplified : gross;
+  const stats = groupStats(group, expenses);
+  const topPayer = stats.reduce(
+    (best, s) => (s.paid > best.paid ? s : best),
+    stats[0] ?? { personId: "", paid: 0, share: 0 },
+  );
+  const topPayerId = topPayer.paid > 0.005 ? topPayer.personId : "";
+  const anySpend = stats.some((s) => s.paid > 0.005 || s.share > 0.005);
 
   return (
     <div className="flex flex-col gap-5">
-      {/* Suggested settle-ups */}
+      {/* Auto-balance / gross toggle */}
+      <section className="flex flex-col gap-2">
+        <div className="grid grid-cols-2 gap-1 rounded-full bg-surface-2 p-1">
+          {(
+            [
+              [true, "⚖️ Auto-balanced"],
+              [false, "📋 Detailed"],
+            ] as const
+          ).map(([val, label]) => (
+            <button
+              key={label}
+              onClick={() => setAutoBalance(val)}
+              className={`rounded-full py-2 text-sm font-bold transition-all ${
+                autoBalance === val ? "bg-surface text-foreground shadow-sm" : "text-muted"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="px-1 text-[11px] font-semibold text-muted">
+          {autoBalance
+            ? "Debts netted down to the fewest payments."
+            : "Every debt shown in full — offsetting amounts aren't cancelled out."}
+        </p>
+      </section>
+
+      {/* Flows list */}
       <section className="flex flex-col gap-3">
         <div className="flex items-center justify-between px-1">
-          <h3 className="font-extrabold">Suggested settle-ups</h3>
-          {transfers.length > 0 && (
+          <h3 className="font-extrabold">{autoBalance ? "Suggested settle-ups" : "Who owes whom"}</h3>
+          {simplified.length > 0 && (
             <ButtonLink href={`/groups/${groupId}/settle`} variant="soft" size="md" className="!h-9 !px-4 text-xs">
               Settle up
             </ButtonLink>
           )}
         </div>
 
-        {transfers.length === 0 ? (
+        {flows.length === 0 ? (
           <div className="rounded-3xl border border-border bg-positive-soft p-6 text-center">
             <p className="text-3xl">✅</p>
-            <p className="mt-2 font-bold text-positive">Everyone's settled up!</p>
+            <p className="mt-2 font-bold text-positive">
+              {anySpend ? "Everyone's settled up!" : "No debts yet"}
+            </p>
           </div>
         ) : (
           <ul className="flex flex-col gap-2.5">
-            {transfers.map((t, i) => {
+            {flows.map((t, i) => {
               const from = person(t.from);
               const to = person(t.to);
-              const involvesMe =
-                t.from === state.meId || t.to === state.meId;
+              const involvesMe = t.from === state.meId || t.to === state.meId;
               return (
                 <li
                   key={i}
                   className={`flex items-center gap-3 rounded-3xl border p-4 shadow-sm ${
-                    involvesMe
-                      ? "border-primary/30 bg-primary-soft"
-                      : "border-border bg-surface"
+                    involvesMe ? "border-primary/30 bg-primary-soft" : "border-border bg-surface"
                   }`}
                 >
                   <Avatar person={from} size="sm" />
@@ -395,39 +444,71 @@ function BalancesTab({
       <section className="flex flex-col gap-3">
         <h3 className="px-1 font-extrabold">Group balances</h3>
         <ul className="flex flex-col gap-2.5">
-          {state.groups
-            .find((g) => g.id === groupId)!
-            .memberIds.map((pid) => {
-              const p = person(pid);
-              const v = net[pid] ?? 0;
-              const settled = Math.abs(v) < 0.005;
-              return (
-                <li
-                  key={pid}
-                  className="flex items-center gap-3 rounded-3xl border border-border bg-surface p-3.5 shadow-sm"
+          {group.memberIds.map((pid) => {
+            const p = person(pid);
+            const v = net[pid] ?? 0;
+            const settled = Math.abs(v) < 0.005;
+            return (
+              <li
+                key={pid}
+                className="flex items-center gap-3 rounded-3xl border border-border bg-surface p-3.5 shadow-sm"
+              >
+                <Avatar person={p} size="md" />
+                <span className="flex-1 font-bold">{pid === state.meId ? "You" : p.name}</span>
+                <span
+                  className={`font-black ${
+                    settled ? "text-muted" : v > 0 ? "text-positive" : "text-negative"
+                  }`}
                 >
-                  <Avatar person={p} size="md" />
-                  <span className="flex-1 font-bold">
-                    {pid === state.meId ? "You" : p.name}
-                  </span>
-                  <span
-                    className={`font-black ${
-                      settled
-                        ? "text-muted"
-                        : v > 0
-                          ? "text-positive"
-                          : "text-negative"
-                    }`}
-                  >
-                    {settled
-                      ? "settled"
-                      : (v > 0 ? "+" : "-") + money(Math.abs(v))}
-                  </span>
-                </li>
-              );
-            })}
+                  {settled ? "settled" : (v > 0 ? "+" : "-") + money(Math.abs(v))}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       </section>
+
+      {/* Group stats — paid vs share per member */}
+      {anySpend && (
+        <section className="flex flex-col gap-3">
+          <h3 className="px-1 font-extrabold">Group stats</h3>
+          <div className="rounded-3xl border border-border bg-surface p-2 shadow-sm">
+            <div className="flex items-center gap-3 px-2 pb-1.5 pt-1 text-[10px] font-bold uppercase tracking-wide text-muted">
+              <span className="flex-1">Member</span>
+              <span className="w-20 text-right">Paid</span>
+              <span className="w-20 text-right">Share</span>
+            </div>
+            <ul className="flex flex-col">
+              {stats.map((s) => {
+                const p = person(s.personId);
+                const isTopPayer = s.personId === topPayerId && s.paid > 0.005;
+                return (
+                  <li key={s.personId} className="flex items-center gap-3 rounded-2xl px-2 py-2.5">
+                    <Avatar person={p} size="sm" />
+                    <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                      <span className="truncate font-bold">
+                        {s.personId === state.meId ? "You" : p.name}
+                      </span>
+                      {isTopPayer && (
+                        <span className="shrink-0 rounded-full bg-primary-soft px-2 py-0.5 text-[10px] font-bold text-primary">
+                          🏆 Top payer
+                        </span>
+                      )}
+                    </span>
+                    <span className="w-20 text-right font-black tabular-nums">{money(s.paid)}</span>
+                    <span className="w-20 text-right font-bold tabular-nums text-muted">
+                      {money(s.share)}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+          <p className="px-1 text-[11px] font-semibold text-muted">
+            Paid = what they fronted · Share = their portion of the bills.
+          </p>
+        </section>
+      )}
     </div>
   );
 }

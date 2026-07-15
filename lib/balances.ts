@@ -101,6 +101,91 @@ export function simplifyDebts(net: Record<string, number>): Transfer[] {
   return transfers;
 }
 
+/**
+ * Gross directional debts, WITHOUT cancelling opposite-direction debts.
+ * Returns one transfer per ordered (debtor → creditor) pair that still has a
+ * positive balance. Unlike simplifyDebts, both A→B and B→A can appear — this is
+ * the "auto-balance off" view where each debt is shown in full.
+ *
+ * Recorded settlements are subtracted from the matching direction (a payment
+ * from X to Y reduces what X owes Y); a settlement with no matching gross debt
+ * is ignored, since this view is informational rather than a net position.
+ */
+export function grossFlows(
+  group: Group,
+  expenses: Expense[],
+  settlements: Settlement[],
+): Transfer[] {
+  // owed[creditor][debtor] = amount the debtor owes the creditor
+  const owed: Record<string, Record<string, number>> = {};
+  const add = (debtor: string, creditor: string, amt: number) => {
+    if (debtor === creditor || amt <= 0) return;
+    (owed[creditor] ??= {})[debtor] = (owed[creditor][debtor] ?? 0) + amt;
+  };
+
+  for (const e of expenses) {
+    for (const s of e.splits) add(s.personId, e.paidBy, s.amount);
+  }
+  if (group.stay) {
+    const splits = computeNights(
+      group.stay.price,
+      group.stay.checkIn,
+      group.stay.checkOut,
+      group.stay.stays,
+    );
+    for (const s of splits) add(s.personId, group.stay.paidBy, s.amount);
+  }
+  for (const st of settlements) {
+    if (owed[st.to]?.[st.from] != null) owed[st.to][st.from] -= st.amount;
+  }
+
+  const flows: Transfer[] = [];
+  for (const creditor of Object.keys(owed)) {
+    for (const debtor of Object.keys(owed[creditor])) {
+      const amount = round2(owed[creditor][debtor]);
+      if (amount > 0.005) flows.push({ from: debtor, to: creditor, amount });
+    }
+  }
+  return flows.sort((a, b) => b.amount - a.amount);
+}
+
+export type MemberStat = { personId: string; paid: number; share: number };
+
+/**
+ * Per-person totals for a group: what each member fronted (`paid`) and their
+ * share of consumption (`share`), across all expenses plus the hotel stay.
+ * Settlements are excluded — they are repayments, not spending.
+ */
+export function groupStats(group: Group, expenses: Expense[]): MemberStat[] {
+  const paid: Record<string, number> = {};
+  const share: Record<string, number> = {};
+  group.memberIds.forEach((id) => {
+    paid[id] = 0;
+    share[id] = 0;
+  });
+
+  for (const e of expenses) {
+    paid[e.paidBy] = (paid[e.paidBy] ?? 0) + e.amount;
+    for (const s of e.splits) share[s.personId] = (share[s.personId] ?? 0) + s.amount;
+  }
+  if (group.stay) {
+    paid[group.stay.paidBy] = (paid[group.stay.paidBy] ?? 0) + group.stay.price;
+    const splits = computeNights(
+      group.stay.price,
+      group.stay.checkIn,
+      group.stay.checkOut,
+      group.stay.stays,
+    );
+    for (const s of splits) share[s.personId] = (share[s.personId] ?? 0) + s.amount;
+  }
+
+  return group.memberIds.map((id) => ({
+    personId: id,
+    paid: round2(paid[id] ?? 0),
+    share: round2(share[id] ?? 0),
+  }));
+}
+
 /** Split an amount evenly across N people, distributing rounding remainders. */
 export function splitEvenly(amount: number, personIds: string[]) {
   const n = personIds.length;
