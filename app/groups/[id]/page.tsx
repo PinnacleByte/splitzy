@@ -310,11 +310,15 @@ function ExpensesTab({ groupId }: { groupId: string }) {
                   {iPaid ? "You" : payer.name} paid {money(e.amount)} ·{" "}
                   {relativeTime(e.createdAt)}
                 </p>
-                {e.config.method !== "equal" && (
-                  <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-[10px] font-bold text-muted">
-                    {METHOD_EMOJI[e.config.method]} {describeSplit(e.config)}
-                  </span>
-                )}
+                {(() => {
+                  const perHH = e.config.method === "equal" && e.config.perHousehold;
+                  if (e.config.method === "equal" && !perHH) return null;
+                  return (
+                    <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-[10px] font-bold text-muted">
+                      {perHH ? "👪" : METHOD_EMOJI[e.config.method]} {describeSplit(e.config)}
+                    </span>
+                  );
+                })()}
               </div>
               <div className="text-right">
                 {Math.abs(delta) < 0.005 ? (

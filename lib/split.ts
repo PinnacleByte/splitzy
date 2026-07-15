@@ -1,4 +1,4 @@
-import type { Split, SplitConfig } from "./types";
+import type { Household, Split, SplitConfig } from "./types";
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -38,6 +38,45 @@ export function computeEqual(amount: number, participantIds: string[]): Split[] 
     participantIds.map((personId) => ({ personId, amount: each })),
     amount,
   );
+}
+
+/**
+ * Equal split divided once per *household* rather than per head: the amount is
+ * shared evenly across the distinct units among the participants (a single
+ * counts as their own unit), then each unit's share is split evenly among its
+ * participating members. computeEqual is reused at both levels, so the top-level
+ * split sums to `amount` exactly and each unit's sub-split sums to its own share.
+ */
+export function computeEqualPerHousehold(
+  amount: number,
+  participantIds: string[],
+  households: Household[],
+): Split[] {
+  const memberToHousehold: Record<string, string> = {};
+  for (const h of households) for (const m of h.memberIds) memberToHousehold[m] = h.id;
+
+  // group the selected participants by unit, preserving first-seen order
+  const unitMembers: Record<string, string[]> = {};
+  const unitOrder: string[] = [];
+  for (const pid of participantIds) {
+    const u = memberToHousehold[pid] ?? pid;
+    if (!unitMembers[u]) {
+      unitMembers[u] = [];
+      unitOrder.push(u);
+    }
+    unitMembers[u].push(pid);
+  }
+  if (unitOrder.length === 0) return [];
+
+  const perUnit = computeEqual(amount, unitOrder); // [{ personId: unitId, amount }]
+  const unitAmount: Record<string, number> = {};
+  for (const u of perUnit) unitAmount[u.personId] = u.amount;
+
+  const splits: Split[] = [];
+  for (const u of unitOrder) {
+    for (const s of computeEqual(unitAmount[u], unitMembers[u])) splits.push(s);
+  }
+  return splits;
 }
 
 /** Weighted split by integer/float shares (e.g. portions). */
@@ -152,11 +191,14 @@ export function computeItemized(
 export function resolveExpense(
   config: SplitConfig,
   enteredAmount: number,
+  households: Household[] = [],
 ): { splits: Split[]; amount: number } {
   switch (config.method) {
     case "equal":
       return {
-        splits: computeEqual(enteredAmount, config.participantIds),
+        splits: config.perHousehold
+          ? computeEqualPerHousehold(enteredAmount, config.participantIds, households)
+          : computeEqual(enteredAmount, config.participantIds),
         amount: enteredAmount,
       };
     case "shares":
@@ -197,7 +239,7 @@ export const METHOD_EMOJI: Record<SplitConfig["method"], string> = {
 export function describeSplit(config: SplitConfig): string {
   switch (config.method) {
     case "equal":
-      return `Split equally · ${config.participantIds.length} people`;
+      return `${config.perHousehold ? "Per household" : "Split equally"} · ${config.participantIds.length} people`;
     case "shares": {
       const active = config.shares.filter((s) => s.units > 0);
       return `By shares · ${active.length} people`;

@@ -48,7 +48,13 @@ export type GroupStay = {
 
 /** How an expense is divided. Discriminated by `method`. */
 export type SplitConfig =
-  | { method: "equal"; participantIds: string[] }
+  | {
+      method: "equal";
+      participantIds: string[];
+      /** when true, split once per household (couple/family) instead of per head:
+       *  amount ÷ distinct units, then each unit's share ÷ its participating members */
+      perHousehold?: boolean;
+    }
   | { method: "shares"; shares: { personId: string; units: number }[] }
   | {
       method: "nights";

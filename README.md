@@ -59,8 +59,9 @@ Each group's **Balances** tab offers two views (toggle at the top):
 A group can organise its members into **households** — a named couple or family who settle as **one wallet** (e.g. *The Sharmas* = {Dad, Mom}). Manage them from a group's **Households** panel: create a household, give it a name + emoji, and tap member chips to add or remove people. Anyone not in a household is a **single**.
 
 - **Settle as one** — the **Balances** tab and **Settle up** screen gain a **Per household / Per person** toggle. In per-household view, each household's members are merged into a single balance, so you never see internal "Dad owes Mom" noise, and settle-ups net between households (a household paying another is recorded as a real person→person payment behind the scenes, charging whoever in the household owes most).
+- **Split per household** — when adding an equal-split single bill, a **Per person / Per household** toggle appears. Per-household divides the bill once per unit rather than per head (a $300 dinner among 3 families = $100 each, not ÷ 6 people), then shares each unit's amount among its participating members — so a family of 2 and a solo diner each owe $100. A household that has nobody ticked simply isn't a unit; a household with one member present carries its whole share. The stored `expense_splits` are still per person.
 - **Scoped to the group** — a household lives inside one group only; it is *not* a permanent link between accounts, so the same person can be solo in one group and part of a couple in another.
-- **Additive** — `expense_splits` stay strictly **per person** in the database; households are just a grouping entity (`households` table + `group_members.household_id`) plus household-aware aggregation in [lib/balances.ts](lib/balances.ts). Nothing about how bills are entered changes.
+- **Additive** — `expense_splits` stay strictly **per person** in the database; households are just a grouping entity (`households` table + `group_members.household_id`) plus household-aware aggregation in [lib/balances.ts](lib/balances.ts) and a per-household equal-split mode (`computeEqualPerHousehold` in [lib/split.ts](lib/split.ts)).
 
 ## Accounts, friends, and isolated circles
 
@@ -86,8 +87,6 @@ Deploy target is [Vercel](https://vercel.com/new). Set all three environment var
 
 ## Roadmap
 
-### Split per household (planned)
+Household grouping — per-household **balances**, **settle-ups**, and an equal-split **per-household mode** — is now shipped (see [Households](#households-couples--families) above).
 
-[Households](#households-couples--families) already group couples/families for **balances and settle-ups**. The remaining piece is a per-household **split mode** in the Add-expense wizard: a bill would divide once per unit instead of per head (a $300 dinner among 3 families = $100 each, not ÷ 6 people), then fan back out to `expense_splits` per person within each household. Splitting per person stays the default; per-household would just be another mode.
-
-This stays additive: the split engine ([lib/split.ts](lib/split.ts)) already operates on participant sets and amounts, so a household is treated as one participant whose share is then divided among its members. No schema change is needed beyond the existing `households` table.
+Deferred v2 ideas: receipts/photo capture, recurring bills, multi-currency, and push notifications.

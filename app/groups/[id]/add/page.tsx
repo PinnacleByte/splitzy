@@ -4,7 +4,7 @@ import { Suspense, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useStore } from "@/lib/store";
 import { resolveExpense } from "@/lib/split";
-import type { Expense, Group, ItemLine, Person, SplitConfig } from "@/lib/types";
+import type { Expense, Group, Household, ItemLine, Person, SplitConfig } from "@/lib/types";
 import { money } from "@/lib/format";
 import {
   BUCKET_DEFS,
@@ -57,6 +57,7 @@ function AddExpenseWizard({
   const { state, person, addExpense, updateExpense, deleteExpense } = useStore();
   const memberIds = group.memberIds;
   const members = memberIds.map(person);
+  const households = group.households ?? [];
 
   const seed = useMemo(
     () => (editExpense ? initFromExpense(editExpense, memberIds, members) : null),
@@ -75,6 +76,8 @@ function AddExpenseWizard({
 
   // single-bill participants (equal split)
   const [participants, setParticipants] = useState<string[]>(seed?.participants ?? memberIds);
+  // split the equal bill once per household (couple/family) instead of per head
+  const [perHousehold, setPerHousehold] = useState(seed?.perHousehold ?? false);
   // mixed-bill buckets, keyed by BucketKind
   const [bucketAmounts, setBucketAmounts] = useState<Record<string, string>>(seed?.bucketAmounts ?? {});
   const [bucketSets, setBucketSets] = useState<Record<string, string[]>>(seed?.bucketSets ?? {});
@@ -117,12 +120,17 @@ function AddExpenseWizard({
         }));
       return { method: "itemized", extra: 0, items: lines };
     }
-    return { method: "equal", participantIds: participants };
-  }, [template, billMode, tmpl, advMethod, units, items, extra, bucketAmounts, bucketSets, participants, memberIds]);
+    return {
+      method: "equal",
+      participantIds: participants,
+      ...(perHousehold ? { perHousehold: true } : {}),
+    };
+  }, [template, billMode, tmpl, advMethod, units, items, extra, bucketAmounts, bucketSets, participants, perHousehold, memberIds]);
 
   const preview = useMemo(
-    () => resolveExpense(config, enteredAmount),
-    [config, enteredAmount],
+    () => resolveExpense(config, enteredAmount, households),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [config, enteredAmount, JSON.stringify(households)],
   );
   const totalAmount = preview.amount;
   const shareOf = (pid: string) =>
@@ -431,6 +439,9 @@ function AddExpenseWizard({
                 selected={participants}
                 setSelected={setParticipants}
                 shareOf={shareOf}
+                households={households}
+                perHousehold={perHousehold}
+                setPerHousehold={setPerHousehold}
               />
             )}
 
@@ -542,6 +553,9 @@ function EqualPicker({
   selected,
   setSelected,
   shareOf,
+  households,
+  perHousehold,
+  setPerHousehold,
 }: {
   memberIds: string[];
   meId: string;
@@ -549,9 +563,46 @@ function EqualPicker({
   selected: string[];
   setSelected: (v: string[]) => void;
   shareOf: (pid: string) => number;
+  households: Household[];
+  perHousehold: boolean;
+  setPerHousehold: (v: boolean) => void;
 }) {
+  const householdOf = (pid: string) => households.find((h) => h.memberIds.includes(pid));
+  // distinct households among the currently selected participants
+  const unitCount = new Set(
+    selected.map((pid) => householdOf(pid)?.id ?? pid),
+  ).size;
+
   return (
     <div className="flex flex-col gap-2">
+      {households.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <div className="grid grid-cols-2 gap-1 rounded-full bg-surface-2 p-1">
+            {(
+              [
+                [false, "🧑 Per person"],
+                [true, "👪 Per household"],
+              ] as const
+            ).map(([val, label]) => (
+              <button
+                key={label}
+                onClick={() => setPerHousehold(val)}
+                className={`rounded-full py-2 text-sm font-bold transition-all ${
+                  perHousehold === val ? "bg-surface text-foreground shadow-sm" : "text-muted"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {perHousehold && (
+            <p className="px-1 text-[11px] font-semibold text-muted">
+              Divided once across {unitCount} {unitCount === 1 ? "unit" : "units"} (each couple/family
+              counts as one), then shared within each household.
+            </p>
+          )}
+        </div>
+      )}
       <p className="px-1 text-[11px] font-semibold text-muted">
         ✨ Auto-picked from profiles — tap anyone to adjust for tonight.
       </p>
@@ -559,6 +610,7 @@ function EqualPicker({
       {memberIds.map((pid) => {
         const p = person(pid);
         const checked = selected.includes(pid);
+        const hh = perHousehold ? householdOf(pid) : undefined;
         return (
           <li key={pid}>
             <button
@@ -570,7 +622,14 @@ function EqualPicker({
               }`}
             >
               <Avatar person={p} size="sm" />
-              <span className="flex-1 text-left font-bold">{pid === meId ? "You" : p.name}</span>
+              <span className="flex min-w-0 flex-1 flex-col text-left">
+                <span className="truncate font-bold">{pid === meId ? "You" : p.name}</span>
+                {hh && (
+                  <span className="truncate text-[11px] font-semibold text-muted">
+                    {hh.emoji} {hh.name}
+                  </span>
+                )}
+              </span>
               {checked && <span className="text-sm font-black text-muted">{money(shareOf(pid))}</span>}
               <Check checked={checked} />
             </button>
@@ -795,6 +854,7 @@ type WizardSeed = {
   template: string;
   bucketKind?: BucketKind;
   participants?: string[];
+  perHousehold?: boolean;
   bucketAmounts?: Record<string, string>;
   bucketSets?: Record<string, string[]>;
   advMethod?: "shares" | "itemized";
@@ -831,6 +891,7 @@ function initFromExpense(e: Expense, memberIds: string[], members: Person[]): Wi
       template,
       bucketKind,
       participants: cfg.participantIds,
+      perHousehold: cfg.perHousehold ?? false,
     };
   }
 
