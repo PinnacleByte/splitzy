@@ -1,6 +1,6 @@
 # Splitzy
 
-A friendly Splitwise-style bill-splitter, built as an installable PWA for a small group of real friends — flexible splitting (equal, shares, itemized, per-night hotel stays, diet/smoker/drinker-aware categories), plus admin-managed accounts and multi-device sync backed by Supabase.
+A friendly Splitwise-style bill-splitter, built as an installable PWA for a small group of real friends — flexible splitting (single or mixed bills, shares, itemized, per-night hotel stays, with diet/drinker/smoker-aware auto-selection), auto-balanced or detailed settle-ups, per-member spend stats, admin-managed accounts, and multi-device sync backed by Supabase.
 
 ## Stack
 
@@ -35,6 +35,24 @@ A friendly Splitwise-style bill-splitter, built as an installable PWA for a smal
    ```
 
    Open [http://localhost:3000](http://localhost:3000) and sign in with the admin account's email + password.
+
+## How splitting works
+
+Every expense starts by choosing a **bill type**:
+
+- **Single bill** — one purpose, split among the relevant people. Pick **Food** (veg / non-veg), **Drinks** (alcoholic / non-alcoholic), or **Other**, and the right members are pre-selected from their profile tags (veg, drinker, smoker, …). Tap anyone to override for that one bill. A **Custom / advanced** option covers uneven splits by shares or a fully itemized bill.
+- **Mixed bill** — one payment that spans several categories (a night out, a grocery run). Enter what was spent on each part — veg food, non-veg food, alcohol, soft drinks, cigarettes, and (for groceries) a catch-all **Other** — and each part is split among its own set of people. The bill total is tallied automatically from the parts.
+
+Member tags are set per person under **Account** (yourself) and **Friends** (others); they only seed the defaults and never lock a split. See [lib/categories.ts](lib/categories.ts) for the bucket/template model and [app/groups/[id]/add/page.tsx](app/groups/%5Bid%5D/add/page.tsx) for the wizard.
+
+### Balances
+
+Each group's **Balances** tab offers two views (toggle at the top):
+
+- **Auto-balanced** (default) — mutual debts cancel out and everything is reduced to the fewest payments, so two people who each fronted roughly the same simply show as settled.
+- **Detailed** — every debt is shown in full, in both directions, without cancelling.
+
+**Group stats** below the balances show what each member **paid** (fronted) versus their **share** (consumed), and badge the biggest individual payer. The math lives in [lib/balances.ts](lib/balances.ts).
 
 ## How adding friends works
 
