@@ -90,12 +90,27 @@ export type Settlement = {
   createdAt: number;
 };
 
+/**
+ * A named unit of members within a single group who settle as one wallet
+ * (a couple or a family). Scoped to the group — not a permanent account link.
+ * Members not in any household are "singles". Balances aggregate per household;
+ * expense_splits stay per person, so this layer is purely additive.
+ */
+export type Household = {
+  id: string;
+  name: string;
+  emoji: string;
+  memberIds: string[];
+};
+
 export type Group = {
   id: string;
   name: string;
   emoji: string;
   memberIds: string[];
   createdAt: number;
+  /** couples/families within the group; absent or empty means everyone is solo */
+  households?: Household[];
   /** present when this is a "staying" group with a shared hotel booking */
   stay?: GroupStay;
 };

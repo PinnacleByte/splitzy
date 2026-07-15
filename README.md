@@ -54,6 +54,14 @@ Each group's **Balances** tab offers two views (toggle at the top):
 
 **Group stats** below the balances show what each member **paid** (fronted) versus their **share** (consumed), and badge the biggest individual payer. The math lives in [lib/balances.ts](lib/balances.ts).
 
+### Households (couples & families)
+
+A group can organise its members into **households** — a named couple or family who settle as **one wallet** (e.g. *The Sharmas* = {Dad, Mom}). Manage them from a group's **Households** panel: create a household, give it a name + emoji, and tap member chips to add or remove people. Anyone not in a household is a **single**.
+
+- **Settle as one** — the **Balances** tab and **Settle up** screen gain a **Per household / Per person** toggle. In per-household view, each household's members are merged into a single balance, so you never see internal "Dad owes Mom" noise, and settle-ups net between households (a household paying another is recorded as a real person→person payment behind the scenes, charging whoever in the household owes most).
+- **Scoped to the group** — a household lives inside one group only; it is *not* a permanent link between accounts, so the same person can be solo in one group and part of a couple in another.
+- **Additive** — `expense_splits` stay strictly **per person** in the database; households are just a grouping entity (`households` table + `group_members.household_id`) plus household-aware aggregation in [lib/balances.ts](lib/balances.ts). Nothing about how bills are entered changes.
+
 ## Accounts, friends, and isolated circles
 
 Anyone can **create their own account** from `/login` → **Create account** (name + email + password). This starts a fresh, empty space — your own "circle" of friends and groups. Different circles never see each other: Row Level Security scopes every table to your friend connections and group memberships ([supabase/schema.sql](supabase/schema.sql)), so your dad running his own trip can't see your data and vice-versa.
@@ -78,14 +86,8 @@ Deploy target is [Vercel](https://vercel.com/new). Set all three environment var
 
 ## Roadmap
 
-### Family / couple grouping (planned)
+### Split per household (planned)
 
-Today every split is **per person**. The next feature adds an optional **household** layer *within a group* — a named unit of members who share one wallet (e.g. *The Sharmas* = {Dad, Mom}). It's aimed at trips where the natural unit is a couple or family rather than an individual.
+[Households](#households-couples--families) already group couples/families for **balances and settle-ups**. The remaining piece is a per-household **split mode** in the Add-expense wizard: a bill would divide once per unit instead of per head (a $300 dinner among 3 families = $100 each, not ÷ 6 people), then fan back out to `expense_splits` per person within each household. Splitting per person stays the default; per-household would just be another mode.
 
-Planned behaviour:
-
-- **Split per household** — a bill divides once per unit instead of per head (a $300 dinner among 3 families = $100 each, not ÷ 6 people). Splitting per person stays available; per-household is just another mode.
-- **Balances net per household** — a couple settles as one; you never see internal "Dad owes Mom" noise.
-- **Scoped to the group** — a unit is defined inside a single group, *not* a permanent link between accounts. The same person can be solo in one group and part of a couple in another.
-
-Design intent (so it stays additive): keep `expense_splits` **per person** in the database, and layer households as (a) a small grouping entity within a group, (b) a per-household split mode, and (c) household-aware aggregation in the [Balances](#balances) view. The existing split engine ([lib/split.ts](lib/split.ts)) already operates on participant sets and amounts, so it can be reused as-is. This is independent of the accounts/isolation model above.
+This stays additive: the split engine ([lib/split.ts](lib/split.ts)) already operates on participant sets and amounts, so a household is treated as one participant whose share is then divided among its members. No schema change is needed beyond the existing `households` table.

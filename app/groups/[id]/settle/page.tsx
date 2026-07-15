@@ -1,9 +1,11 @@
 "use client";
 
+import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useStore } from "@/lib/store";
-import { groupNet, simplifyDebts } from "@/lib/balances";
+import { groupNet, simplifyDebts, householdNet, resolveUnitTransfer } from "@/lib/balances";
 import { money } from "@/lib/format";
+import type { Household, Person } from "@/lib/types";
 import { Avatar } from "@/components/Avatar";
 import { Button, ButtonLink } from "@/components/Button";
 import { Loading, NotFound } from "@/components/Screen";
@@ -14,15 +16,28 @@ export default function SettlePage() {
   const { state, person, addSettlement, hydrated } = useStore();
 
   const group = state.groups.find((g) => g.id === id);
+  const [byHousehold, setByHousehold] = useState(true);
   if (!hydrated) return <Loading />;
   if (!group) return <NotFound what="group" />;
+
+  const households = group.households ?? [];
+  const hasHouseholds = households.length > 0;
+  const grouped = hasHouseholds && byHousehold;
 
   const expenses = state.expenses.filter((e) => e.groupId === id);
   const settlements = state.settlements.filter((s) => s.groupId === id);
   const net = groupNet(group, expenses, settlements);
-  const transfers = simplifyDebts(net);
+  const netView = grouped ? householdNet(net, households) : net;
+  const transfers = simplifyDebts(netView);
 
-  const record = (from: string, to: string, amount: number) => {
+  const hById = (uid: string) => households.find((h) => h.id === uid);
+  const unitName = (uid: string) => hById(uid)?.name || (uid === state.meId ? "You" : person(uid).name);
+
+  const record = (fromUnit: string, toUnit: string, amount: number) => {
+    // household transfers are recorded as a concrete person→person settlement
+    const { from, to } = grouped
+      ? resolveUnitTransfer(fromUnit, toUnit, net, households)
+      : { from: fromUnit, to: toUnit };
     addSettlement({ groupId: id, from, to, amount });
   };
 
@@ -49,6 +64,27 @@ export default function SettlePage() {
           </p>
         </div>
 
+        {hasHouseholds && (
+          <div className="grid grid-cols-2 gap-1 rounded-full bg-surface-2 p-1">
+            {(
+              [
+                [true, "👪 Per household"],
+                [false, "🧑 Per person"],
+              ] as const
+            ).map(([val, label]) => (
+              <button
+                key={label}
+                onClick={() => setByHousehold(val)}
+                className={`rounded-full py-2 text-sm font-bold transition-all ${
+                  byHousehold === val ? "bg-surface text-foreground shadow-sm" : "text-muted"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+
         {transfers.length === 0 ? (
           <div className="flex flex-col items-center gap-4 rounded-3xl border border-border bg-surface p-8 text-center">
             <p className="text-5xl">🥳</p>
@@ -59,40 +95,55 @@ export default function SettlePage() {
           </div>
         ) : (
           <ul className="flex flex-col gap-3">
-            {transfers.map((t, i) => {
-              const from = person(t.from);
-              const to = person(t.to);
-              return (
-                <li
-                  key={i}
-                  className="flex flex-col gap-3 rounded-3xl border border-border bg-surface p-4 shadow-sm"
-                >
-                  <div className="flex items-center gap-3">
-                    <Avatar person={from} size="md" />
-                    <div className="flex flex-1 flex-col">
-                      <span className="text-sm font-bold">
-                        <b>{t.from === state.meId ? "You" : from.name}</b> pays{" "}
-                        <b>{t.to === state.meId ? "you" : to.name}</b>
-                      </span>
-                      <span className="text-xs font-semibold text-muted">
-                        settles {money(t.amount)}
-                      </span>
-                    </div>
-                    <Avatar person={to} size="md" />
+            {transfers.map((t, i) => (
+              <li
+                key={i}
+                className="flex flex-col gap-3 rounded-3xl border border-border bg-surface p-4 shadow-sm"
+              >
+                <div className="flex items-center gap-3">
+                  <UnitFace id={t.from} households={households} person={person} />
+                  <div className="flex flex-1 flex-col">
+                    <span className="text-sm font-bold">
+                      <b>{unitName(t.from)}</b> pays <b>{unitName(t.to)}</b>
+                    </span>
+                    <span className="text-xs font-semibold text-muted">
+                      settles {money(t.amount)}
+                    </span>
                   </div>
-                  <Button
-                    onClick={() => record(t.from, t.to, t.amount)}
-                    variant="positive"
-                    fullWidth
-                  >
-                    Mark {money(t.amount)} as paid
-                  </Button>
-                </li>
-              );
-            })}
+                  <UnitFace id={t.to} households={households} person={person} />
+                </div>
+                <Button
+                  onClick={() => record(t.from, t.to, t.amount)}
+                  variant="positive"
+                  fullWidth
+                >
+                  Mark {money(t.amount)} as paid
+                </Button>
+              </li>
+            ))}
           </ul>
         )}
       </div>
     </main>
   );
+}
+
+/** Avatar for a settle "unit": household emoji tile, or a person's avatar. */
+function UnitFace({
+  id,
+  households,
+  person,
+}: {
+  id: string;
+  households: Household[];
+  person: (id: string) => Person;
+}) {
+  const h = households.find((x) => x.id === id);
+  if (h)
+    return (
+      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-surface-2 text-xl">
+        {h.emoji}
+      </span>
+    );
+  return <Avatar person={person(id)} size="md" />;
 }

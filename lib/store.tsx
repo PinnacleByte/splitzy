@@ -14,6 +14,7 @@ import type {
   Expense,
   Group,
   GroupStay,
+  Household,
   Person,
   Settlement,
 } from "./types";
@@ -74,6 +75,25 @@ type Store = {
     personId: string,
     stayDates?: { from: string; to: string },
   ) => void;
+  /** create a household (couple/family) in a group and move `memberIds` into it */
+  createHousehold: (
+    groupId: string,
+    data: { name: string; emoji: string; memberIds: string[] },
+  ) => Household;
+  /** rename / re-emoji a household */
+  updateHousehold: (
+    groupId: string,
+    householdId: string,
+    patch: { name?: string; emoji?: string },
+  ) => void;
+  /** move a member into a household, or pass null to make them a single again */
+  setMemberHousehold: (
+    groupId: string,
+    personId: string,
+    householdId: string | null,
+  ) => void;
+  /** disband a household — its members become singles again */
+  deleteHousehold: (groupId: string, householdId: string) => void;
   updateStay: (groupId: string, patch: Partial<GroupStay>) => void;
   setMemberStay: (
     groupId: string,
@@ -139,7 +159,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       .select(
         `group:groups(
           id, name, emoji, created_at,
-          group_members(person_id),
+          group_members(person_id, household_id),
+          households(id, name, emoji),
           group_stays(check_in, check_out, price, paid_by),
           stays(person_id, from, to),
           expenses(id, description, emoji, amount, paid_by, config, category, created_at,
@@ -166,12 +187,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         paid_by: string;
       } | null;
       const staysRows = g.stays as Array<{ person_id: string; from: string; to: string }>;
+      const memberRows = g.group_members as Array<{ person_id: string; household_id: string | null }>;
+      const householdRows = (g.households as Array<{ id: string; name: string; emoji: string }>) ?? [];
+      const households = householdRows.map((h) => ({
+        id: h.id,
+        name: h.name,
+        emoji: h.emoji,
+        memberIds: memberRows.filter((m) => m.household_id === h.id).map((m) => m.person_id),
+      }));
 
       groups.push({
         id: g.id as string,
         name: g.name as string,
         emoji: g.emoji as string,
-        memberIds: (g.group_members as Array<{ person_id: string }>).map((m) => m.person_id),
+        memberIds: memberRows.map((m) => m.person_id),
+        households,
         createdAt: new Date(g.created_at as string).getTime(),
         ...(groupStay
           ? {
@@ -380,6 +410,103 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       })().catch((err) => pushError("add them to the group", err));
     };
 
+    const createHousehold: Store["createHousehold"] = (groupId, { name, emoji, memberIds }) => {
+      const id = crypto.randomUUID();
+      const household: Household = { id, name, emoji, memberIds };
+
+      setState((s) => ({
+        ...s,
+        groups: s.groups.map((g) => {
+          if (g.id !== groupId) return g;
+          // pull these members out of any household they were already in
+          const others = (g.households ?? []).map((h) => ({
+            ...h,
+            memberIds: h.memberIds.filter((m) => !memberIds.includes(m)),
+          }));
+          return { ...g, households: [...others, household] };
+        }),
+      }));
+
+      (async () => {
+        unwrap(await supabase.from("households").insert({ id, group_id: groupId, name, emoji }));
+        if (memberIds.length) {
+          unwrap(
+            await supabase
+              .from("group_members")
+              .update({ household_id: id })
+              .eq("group_id", groupId)
+              .in("person_id", memberIds),
+          );
+        }
+      })().catch((err) => pushError("create the household", err));
+
+      return household;
+    };
+
+    const updateHousehold: Store["updateHousehold"] = (groupId, householdId, patch) => {
+      setState((s) => ({
+        ...s,
+        groups: s.groups.map((g) =>
+          g.id === groupId
+            ? {
+                ...g,
+                households: (g.households ?? []).map((h) =>
+                  h.id === householdId ? { ...h, ...patch } : h,
+                ),
+              }
+            : g,
+        ),
+      }));
+
+      supabase
+        .from("households")
+        .update(patch)
+        .eq("id", householdId)
+        .then(({ error }) => error && pushError("rename the household", new Error(error.message)));
+    };
+
+    const setMemberHousehold: Store["setMemberHousehold"] = (groupId, personId, householdId) => {
+      setState((s) => ({
+        ...s,
+        groups: s.groups.map((g) => {
+          if (g.id !== groupId) return g;
+          const households = (g.households ?? []).map((h) => ({
+            ...h,
+            memberIds:
+              h.id === householdId
+                ? Array.from(new Set([...h.memberIds, personId]))
+                : h.memberIds.filter((m) => m !== personId),
+          }));
+          return { ...g, households };
+        }),
+      }));
+
+      supabase
+        .from("group_members")
+        .update({ household_id: householdId })
+        .eq("group_id", groupId)
+        .eq("person_id", personId)
+        .then(({ error }) => error && pushError("update the household", new Error(error.message)));
+    };
+
+    const deleteHousehold: Store["deleteHousehold"] = (groupId, householdId) => {
+      setState((s) => ({
+        ...s,
+        groups: s.groups.map((g) =>
+          g.id === groupId
+            ? { ...g, households: (g.households ?? []).filter((h) => h.id !== householdId) }
+            : g,
+        ),
+      }));
+
+      // FK `on delete set null` resets the members' household_id automatically.
+      supabase
+        .from("households")
+        .delete()
+        .eq("id", householdId)
+        .then(({ error }) => error && pushError("disband the household", new Error(error.message)));
+    };
+
     const updateStay: Store["updateStay"] = (groupId, patch) => {
       setState((s) => ({
         ...s,
@@ -564,6 +691,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       toggleTag,
       updateMyProfile,
       addMemberToGroup,
+      createHousehold,
+      updateHousehold,
+      setMemberHousehold,
+      deleteHousehold,
       updateStay,
       setMemberStay,
       addExpense,

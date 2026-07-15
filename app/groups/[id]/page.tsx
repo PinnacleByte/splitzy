@@ -4,10 +4,18 @@ import { useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useStore } from "@/lib/store";
-import { groupNet, simplifyDebts, grossFlows, groupStats } from "@/lib/balances";
+import {
+  groupNet,
+  simplifyDebts,
+  grossFlows,
+  groupStats,
+  householdNet,
+  householdFlows,
+  householdStats,
+} from "@/lib/balances";
 import { computeNights, describeSplit, METHOD_EMOJI, nightsBetween } from "@/lib/split";
 import { money, relativeTime } from "@/lib/format";
-import type { Group, Expense, Settlement } from "@/lib/types";
+import type { Group, Expense, Household, Person, Settlement } from "@/lib/types";
 import { Avatar, AvatarStack } from "@/components/Avatar";
 import { ButtonLink } from "@/components/Button";
 import { AddFriendForm } from "@/components/AddFriendForm";
@@ -122,6 +130,9 @@ export default function GroupPage() {
         {/* Members */}
         <MembersRow group={group} />
 
+        {/* Households — group couples/families so they settle as one */}
+        <HouseholdsSection group={group} />
+
         {/* Tabs */}
         <div className="flex gap-1 rounded-full bg-surface-2 p-1">
           {(["expenses", "balances"] as const).map((t) => (
@@ -148,6 +159,7 @@ export default function GroupPage() {
             expenses={expenses}
             settlements={settlements}
             net={net}
+            households={group.households ?? []}
           />
         )}
       </div>
@@ -341,20 +353,30 @@ function BalancesTab({
   expenses,
   settlements,
   net,
+  households,
 }: {
   groupId: string;
   group: Group;
   expenses: Expense[];
   settlements: Settlement[];
   net: Record<string, number>;
+  households: Household[];
 }) {
   const { state, person } = useStore();
   const [autoBalance, setAutoBalance] = useState(true);
+  const hasHouseholds = households.length > 0;
+  const [byHousehold, setByHousehold] = useState(hasHouseholds);
+  const grouped = hasHouseholds && byHousehold;
 
-  const simplified = simplifyDebts(net);
-  const gross = grossFlows(group, expenses, settlements);
+  // In household mode, collapse every per-person figure into per-unit figures.
+  const netView = grouped ? householdNet(net, households) : net;
+  const simplified = simplifyDebts(netView);
+  const grossPerson = grossFlows(group, expenses, settlements);
+  const gross = grouped ? householdFlows(grossPerson, households) : grossPerson;
   const flows = autoBalance ? simplified : gross;
-  const stats = groupStats(group, expenses);
+
+  const statsAll = groupStats(group, expenses);
+  const stats = grouped ? householdStats(statsAll, households) : statsAll;
   const topPayer = stats.reduce(
     (best, s) => (s.paid > best.paid ? s : best),
     stats[0] ?? { personId: "", paid: 0, share: 0 },
@@ -362,8 +384,42 @@ function BalancesTab({
   const topPayerId = topPayer.paid > 0.005 ? topPayer.personId : "";
   const anySpend = stats.some((s) => s.paid > 0.005 || s.share > 0.005);
 
+  // ordered list of units for the balances/stats rows
+  const inHousehold = new Set(households.flatMap((h) => h.memberIds));
+  const singleIds = group.memberIds.filter((pid) => !inHousehold.has(pid));
+  const balanceUnits = grouped ? [...households.map((h) => h.id), ...singleIds] : group.memberIds;
+
+  const hById = (id: string) => households.find((h) => h.id === id);
+  const unitName = (id: string) => hById(id)?.name || (id === state.meId ? "You" : person(id).name);
+  const unitHasMe = (id: string) => {
+    const h = hById(id);
+    return h ? h.memberIds.includes(state.meId) : id === state.meId;
+  };
+
   return (
     <div className="flex flex-col gap-5">
+      {/* Per-person / per-household toggle */}
+      {hasHouseholds && (
+        <div className="grid grid-cols-2 gap-1 rounded-full bg-surface-2 p-1">
+          {(
+            [
+              [true, "👪 Per household"],
+              [false, "🧑 Per person"],
+            ] as const
+          ).map(([val, label]) => (
+            <button
+              key={label}
+              onClick={() => setByHousehold(val)}
+              className={`rounded-full py-2 text-sm font-bold transition-all ${
+                byHousehold === val ? "bg-surface text-foreground shadow-sm" : "text-muted"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Auto-balance / gross toggle */}
       <section className="flex flex-col gap-2">
         <div className="grid grid-cols-2 gap-1 rounded-full bg-surface-2 p-1">
@@ -386,7 +442,9 @@ function BalancesTab({
         </div>
         <p className="px-1 text-[11px] font-semibold text-muted">
           {autoBalance
-            ? "Debts netted down to the fewest payments."
+            ? grouped
+              ? "Debts netted down to the fewest payments between households."
+              : "Debts netted down to the fewest payments."
             : "Every debt shown in full — offsetting amounts aren't cancelled out."}
         </p>
       </section>
@@ -412,9 +470,7 @@ function BalancesTab({
         ) : (
           <ul className="flex flex-col gap-2.5">
             {flows.map((t, i) => {
-              const from = person(t.from);
-              const to = person(t.to);
-              const involvesMe = t.from === state.meId || t.to === state.meId;
+              const involvesMe = unitHasMe(t.from) || unitHasMe(t.to);
               return (
                 <li
                   key={i}
@@ -422,13 +478,13 @@ function BalancesTab({
                     involvesMe ? "border-primary/30 bg-primary-soft" : "border-border bg-surface"
                   }`}
                 >
-                  <Avatar person={from} size="sm" />
+                  <UnitFace id={t.from} households={households} person={person} size="sm" />
                   <div className="flex flex-1 items-center gap-2 text-sm font-bold">
-                    <span>{t.from === state.meId ? "You" : from.name}</span>
+                    <span>{unitName(t.from)}</span>
                     <ArrowIcon />
-                    <span>{t.to === state.meId ? "You" : to.name}</span>
+                    <span>{unitName(t.to)}</span>
                   </div>
-                  <Avatar person={to} size="sm" />
+                  <UnitFace id={t.to} households={households} person={person} size="sm" />
                   <span className="ml-1 font-black">{money(t.amount)}</span>
                 </li>
               );
@@ -437,21 +493,28 @@ function BalancesTab({
         )}
       </section>
 
-      {/* Per-member net */}
+      {/* Per-unit net */}
       <section className="flex flex-col gap-3">
-        <h3 className="px-1 font-extrabold">Group balances</h3>
+        <h3 className="px-1 font-extrabold">{grouped ? "Household balances" : "Group balances"}</h3>
         <ul className="flex flex-col gap-2.5">
-          {group.memberIds.map((pid) => {
-            const p = person(pid);
-            const v = net[pid] ?? 0;
+          {balanceUnits.map((uid) => {
+            const v = netView[uid] ?? 0;
             const settled = Math.abs(v) < 0.005;
+            const h = hById(uid);
             return (
               <li
-                key={pid}
+                key={uid}
                 className="flex items-center gap-3 rounded-3xl border border-border bg-surface p-3.5 shadow-sm"
               >
-                <Avatar person={p} size="md" />
-                <span className="flex-1 font-bold">{pid === state.meId ? "You" : p.name}</span>
+                <UnitFace id={uid} households={households} person={person} size="md" />
+                <div className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate font-bold">{unitName(uid)}</span>
+                  {h && (
+                    <span className="truncate text-[11px] font-semibold text-muted">
+                      {h.memberIds.map((m) => (m === state.meId ? "You" : person(m).name)).join(", ")}
+                    </span>
+                  )}
+                </div>
                 <span
                   className={`font-black ${
                     settled ? "text-muted" : v > 0 ? "text-positive" : "text-negative"
@@ -465,27 +528,24 @@ function BalancesTab({
         </ul>
       </section>
 
-      {/* Group stats — paid vs share per member */}
+      {/* Stats — paid vs share per unit */}
       {anySpend && (
         <section className="flex flex-col gap-3">
           <h3 className="px-1 font-extrabold">Group stats</h3>
           <div className="rounded-3xl border border-border bg-surface p-2 shadow-sm">
             <div className="flex items-center gap-3 px-2 pb-1.5 pt-1 text-[10px] font-bold uppercase tracking-wide text-muted">
-              <span className="flex-1">Member</span>
+              <span className="flex-1">{grouped ? "Household" : "Member"}</span>
               <span className="w-20 text-right">Paid</span>
               <span className="w-20 text-right">Share</span>
             </div>
             <ul className="flex flex-col">
               {stats.map((s) => {
-                const p = person(s.personId);
                 const isTopPayer = s.personId === topPayerId && s.paid > 0.005;
                 return (
                   <li key={s.personId} className="flex items-center gap-3 rounded-2xl px-2 py-2.5">
-                    <Avatar person={p} size="sm" />
+                    <UnitFace id={s.personId} households={households} person={person} size="sm" />
                     <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                      <span className="truncate font-bold">
-                        {s.personId === state.meId ? "You" : p.name}
-                      </span>
+                      <span className="truncate font-bold">{unitName(s.personId)}</span>
                       {isTopPayer && (
                         <span className="shrink-0 rounded-full bg-primary-soft px-2 py-0.5 text-[10px] font-bold text-primary">
                           🏆 Top payer
@@ -506,6 +566,281 @@ function BalancesTab({
           </p>
         </section>
       )}
+    </div>
+  );
+}
+
+/** Avatar for a "unit": a household shows its emoji tile, a person their avatar. */
+function UnitFace({
+  id,
+  households,
+  person,
+  size,
+}: {
+  id: string;
+  households: Household[];
+  person: (id: string) => Person;
+  size: "sm" | "md";
+}) {
+  const h = households.find((x) => x.id === id);
+  if (h) {
+    const box = size === "md" ? "h-10 w-10 text-xl" : "h-9 w-9 text-lg";
+    return (
+      <span className={`grid shrink-0 place-items-center rounded-2xl bg-surface-2 ${box}`}>
+        {h.emoji}
+      </span>
+    );
+  }
+  return <Avatar person={person(id)} size={size} />;
+}
+
+/* ---------- households management ---------- */
+
+const HOUSEHOLD_EMOJIS = ["💑", "👪", "🧑‍🤝‍🧑", "👨‍👩‍👧", "👩‍👧", "🏠", "❤️", "🐣"];
+
+function HouseholdsSection({ group }: { group: Group }) {
+  const { state, person, createHousehold, updateHousehold, setMemberHousehold, deleteHousehold } =
+    useStore();
+  const [open, setOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newEmoji, setNewEmoji] = useState(HOUSEHOLD_EMOJIS[0]);
+
+  const households = group.households ?? [];
+  const inHousehold = new Set(households.flatMap((h) => h.memberIds));
+  const singleIds = group.memberIds.filter((pid) => !inHousehold.has(pid));
+  const name = (pid: string) => (pid === state.meId ? "You" : person(pid).name);
+
+  const startCreate = () => {
+    setCreating(true);
+    setNewName("");
+    setNewEmoji(HOUSEHOLD_EMOJIS[0]);
+  };
+  const commitCreate = () => {
+    const label = newName.trim();
+    if (!label) return;
+    createHousehold(group.id, { name: label, emoji: newEmoji, memberIds: [] });
+    setCreating(false);
+    setNewName("");
+  };
+
+  const summary =
+    households.length === 0
+      ? "Group couples & families so they settle as one"
+      : `${households.length} household${households.length > 1 ? "s" : ""} · ${singleIds.length} single${
+          singleIds.length === 1 ? "" : "s"
+        }`;
+
+  return (
+    <div className="flex flex-col gap-3 rounded-3xl border border-border bg-surface p-3.5 shadow-sm">
+      <button onClick={() => setOpen((v) => !v)} className="flex items-center gap-3 text-left">
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-surface-2 text-xl">
+          👪
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="font-extrabold leading-tight">Households</p>
+          <p className="truncate text-[11px] font-semibold text-muted">{summary}</p>
+        </div>
+        <span className={`text-muted transition-transform ${open ? "rotate-90" : ""}`}>›</span>
+      </button>
+
+      {open && (
+        <div className="flex flex-col gap-3 border-t border-border pt-3">
+          {households.map((h) => (
+            <HouseholdCard
+              key={h.id}
+              household={h}
+              singleIds={singleIds}
+              meId={state.meId}
+              person={person}
+              onRename={(patch) => updateHousehold(group.id, h.id, patch)}
+              onToggleMember={(pid, on) =>
+                setMemberHousehold(group.id, pid, on ? h.id : null)
+              }
+              onDelete={() => {
+                if (confirm(`Disband "${h.name}"? Its members become singles again.`))
+                  deleteHousehold(group.id, h.id);
+              }}
+            />
+          ))}
+
+          {/* create a new household */}
+          {creating ? (
+            <div className="flex flex-col gap-2 rounded-2xl border border-dashed border-border bg-surface/50 p-3">
+              <div className="no-scrollbar flex gap-1.5 overflow-x-auto pb-1">
+                {HOUSEHOLD_EMOJIS.map((em) => (
+                  <button
+                    key={em}
+                    onClick={() => setNewEmoji(em)}
+                    className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-lg transition-all ${
+                      newEmoji === em ? "bg-primary-soft ring-2 ring-primary" : "bg-surface-2"
+                    }`}
+                  >
+                    {em}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  autoFocus
+                  placeholder="Household name (e.g. The Sharmas)"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && commitCreate()}
+                  className="min-w-0 flex-1 rounded-full bg-surface-2 px-4 py-2 text-sm font-bold outline-none placeholder:font-semibold placeholder:text-muted"
+                />
+                <button
+                  onClick={commitCreate}
+                  disabled={!newName.trim()}
+                  className="rounded-full bg-primary px-4 py-2 text-sm font-bold text-white active:scale-95 disabled:opacity-40"
+                >
+                  Create
+                </button>
+                <button
+                  onClick={() => setCreating(false)}
+                  className="px-1 text-xs font-bold text-muted active:scale-95"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={startCreate}
+              className="rounded-2xl border border-dashed border-border bg-surface/50 py-3 text-sm font-bold text-primary active:scale-[0.99]"
+            >
+              ＋ New household
+            </button>
+          )}
+
+          {/* singles */}
+          <div className="flex flex-col gap-1.5">
+            <p className="px-1 text-[11px] font-bold uppercase tracking-wide text-muted">
+              Singles
+            </p>
+            {singleIds.length === 0 ? (
+              <p className="px-1 text-xs font-semibold text-muted">Everyone is in a household.</p>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {singleIds.map((pid) => (
+                  <span
+                    key={pid}
+                    className="flex items-center gap-1.5 rounded-full bg-surface-2 py-1 pl-1 pr-3 text-xs font-bold"
+                  >
+                    <Avatar person={person(pid)} size="sm" />
+                    {name(pid)}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HouseholdCard({
+  household,
+  singleIds,
+  meId,
+  person,
+  onRename,
+  onToggleMember,
+  onDelete,
+}: {
+  household: Household;
+  /** members not in any household — candidates to add here */
+  singleIds: string[];
+  meId: string;
+  person: (id: string) => Person;
+  onRename: (patch: { name?: string; emoji?: string }) => void;
+  onToggleMember: (personId: string, on: boolean) => void;
+  onDelete: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(household.name);
+  const name = (pid: string) => (pid === meId ? "You" : person(pid).name);
+  const memberSet = new Set(household.memberIds);
+  // this household's own members (to remove) plus any singles (to add in)
+  const assignable = [...household.memberIds, ...singleIds];
+
+  const commitName = () => {
+    const v = draft.trim();
+    if (v && v !== household.name) onRename({ name: v });
+    setEditing(false);
+  };
+
+  return (
+    <div className="flex flex-col gap-2 rounded-2xl border border-border bg-surface-2/40 p-3">
+      <div className="flex items-center gap-2">
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-2xl bg-surface text-lg">
+          {household.emoji}
+        </span>
+        {editing ? (
+          <input
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commitName}
+            onKeyDown={(e) => e.key === "Enter" && commitName()}
+            className="min-w-0 flex-1 rounded-full bg-surface px-3 py-1.5 text-sm font-bold outline-none"
+          />
+        ) : (
+          <button
+            onClick={() => {
+              setDraft(household.name);
+              setEditing(true);
+            }}
+            className="min-w-0 flex-1 truncate text-left font-extrabold"
+          >
+            {household.name}
+          </button>
+        )}
+        <button
+          onClick={onDelete}
+          aria-label="Disband household"
+          className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-muted hover:bg-negative-soft hover:text-negative"
+        >
+          <TrashIcon />
+        </button>
+      </div>
+
+      {editing && (
+        <div className="no-scrollbar flex gap-1.5 overflow-x-auto pb-1">
+          {HOUSEHOLD_EMOJIS.map((em) => (
+            <button
+              key={em}
+              onClick={() => onRename({ emoji: em })}
+              className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-base transition-all ${
+                household.emoji === em ? "bg-primary-soft ring-2 ring-primary" : "bg-surface"
+              }`}
+            >
+              {em}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* member chips — tap to add/remove from this household */}
+      <div className="flex flex-wrap gap-1.5">
+        {assignable.map((pid) => {
+          const on = memberSet.has(pid);
+          return (
+            <button
+              key={pid}
+              onClick={() => onToggleMember(pid, !on)}
+              className={`flex items-center gap-1.5 rounded-full py-1 pl-1 pr-3 text-xs font-bold transition-all ${
+                on ? "bg-primary-soft text-primary ring-1 ring-primary/30" : "bg-surface text-muted opacity-70"
+              }`}
+            >
+              <Avatar person={person(pid)} size="sm" />
+              {name(pid)}
+              {on && <span className="text-primary/60">✕</span>}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

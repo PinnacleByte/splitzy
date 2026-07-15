@@ -45,11 +45,32 @@ create table if not exists groups (
   created_at timestamptz not null default now()
 );
 
+-- A named household within a group (a couple/family who settle as one wallet).
+-- Scoped to a single group — NOT a permanent link between accounts, so the same
+-- person can be solo in one group and part of a couple in another. Membership is
+-- tracked by group_members.household_id below; a member with a null household_id
+-- is a "single". Balances/settle-ups aggregate per household (lib/balances.ts),
+-- while expense_splits stay strictly per person.
+create table if not exists households (
+  id uuid primary key default gen_random_uuid(),
+  group_id uuid not null references groups (id) on delete cascade,
+  name text not null,
+  emoji text not null default '👪',
+  created_at timestamptz not null default now()
+);
+
 create table if not exists group_members (
   group_id uuid not null references groups (id) on delete cascade,
   person_id uuid not null references profiles (id) on delete cascade,
+  -- which household (if any) this member belongs to, within this group.
+  -- on delete set null: deleting a household turns its members back into singles.
+  household_id uuid references households (id) on delete set null,
   primary key (group_id, person_id)
 );
+
+-- Existing installs: add the column if the table predates households.
+alter table group_members
+  add column if not exists household_id uuid references households (id) on delete set null;
 
 -- 1:1 with a Group's optional hotel-stay booking (GroupStay in lib/types.ts).
 create table if not exists group_stays (
@@ -189,6 +210,7 @@ $$;
 alter table profiles enable row level security;
 alter table connections enable row level security;
 alter table groups enable row level security;
+alter table households enable row level security;
 alter table group_members enable row level security;
 alter table group_stays enable row level security;
 alter table stays enable row level security;
@@ -241,6 +263,11 @@ drop policy if exists "groups_delete" on groups;
 create policy "groups_delete" on groups for delete
   using (is_group_member(id));
 
+-- households: fully managed by any member of the owning group.
+drop policy if exists "households_all" on households;
+create policy "households_all" on households for all
+  using (is_group_member(group_id)) with check (is_group_member(group_id));
+
 -- group_members: a member can add another *connection* to the group;
 -- the creator can add themself right after creating the group (before any
 -- group_members row exists yet, so is_group_member() would still say false).
@@ -254,6 +281,11 @@ create policy "group_members_insert" on group_members for insert
     (person_id = auth.uid() and is_group_creator(group_id))
     or (is_group_member(group_id) and is_connected(person_id))
   );
+
+-- update is needed to (re)assign a member's household_id; any group member may.
+drop policy if exists "group_members_update" on group_members;
+create policy "group_members_update" on group_members for update
+  using (is_group_member(group_id)) with check (is_group_member(group_id));
 
 drop policy if exists "group_members_delete" on group_members;
 create policy "group_members_delete" on group_members for delete
@@ -296,7 +328,7 @@ declare
   t text;
 begin
   foreach t in array array[
-    'groups', 'group_members', 'group_stays', 'stays',
+    'groups', 'households', 'group_members', 'group_stays', 'stays',
     'expenses', 'expense_splits', 'settlements', 'connections', 'profiles'
   ]
   loop
