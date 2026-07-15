@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useStore } from "@/lib/store";
 import { friendNet, overallNet } from "@/lib/balances";
 import { money } from "@/lib/format";
-import { getCategory } from "@/lib/categories";
+import { getCategoryMeta } from "@/lib/categories";
 
 export default function InsightsPage() {
   const { state } = useStore();
@@ -42,7 +42,7 @@ export default function InsightsPage() {
     catMap.set(key, cur);
   };
   for (const e of state.expenses) {
-    const c = e.category ? getCategory(e.category) : undefined;
+    const c = e.category ? getCategoryMeta(e.category) : undefined;
     const label = c?.label ?? (e.category === "advanced" ? "Custom" : "Other");
     const emoji = c?.emoji ?? "🧾";
     bump(e.category ?? "other", label, emoji, e.amount);

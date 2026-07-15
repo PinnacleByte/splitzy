@@ -7,18 +7,20 @@ import { resolveExpense } from "@/lib/split";
 import type { Expense, Group, ItemLine, Person, SplitConfig } from "@/lib/types";
 import { money } from "@/lib/format";
 import {
-  CATEGORIES,
-  MIXED_BUCKETS,
-  getCategory,
-  selectForCategory,
-  membersWithTag,
+  BUCKET_DEFS,
+  SINGLE_TEMPLATES,
+  MIXED_TEMPLATES,
+  getTemplate,
+  selectForBucket,
+  type BucketKind,
 } from "@/lib/categories";
 import { Avatar } from "@/components/Avatar";
 import { Button } from "@/components/Button";
 import { Loading, NotFound } from "@/components/Screen";
 
 const rid = () => Math.random().toString(36).slice(2, 9);
-const round2 = (n: number) => Math.round(n * 100) / 100;
+const BUCKET_KEYS = Object.keys(BUCKET_DEFS) as BucketKind[];
+const isBucketKind = (v?: string): v is BucketKind => !!v && (BUCKET_KEYS as string[]).includes(v);
 
 export default function AddExpensePage() {
   return (
@@ -42,7 +44,7 @@ function AddExpenseGate() {
   return <AddExpenseWizard key={editExpense?.id ?? "new"} group={group} editExpense={editExpense} />;
 }
 
-type Cat = string; // category key, or "advanced"
+type BillMode = "single" | "mixed";
 
 function AddExpenseWizard({
   group,
@@ -62,18 +64,18 @@ function AddExpenseWizard({
     [],
   );
 
-  const [step, setStep] = useState(editExpense ? 2 : 1);
+  const [step, setStep] = useState(editExpense ? 3 : 1);
   const [amount, setAmount] = useState(seed?.amount ?? "");
   const [paidBy, setPaidBy] = useState(seed?.paidBy ?? state.meId);
-  const [category, setCategory] = useState<Cat | null>(seed?.category ?? null);
+  const [billMode, setBillMode] = useState<BillMode | null>(seed?.billMode ?? null);
+  const [template, setTemplate] = useState<string | null>(seed?.template ?? null);
+  const [bucketKind, setBucketKind] = useState<BucketKind | null>(seed?.bucketKind ?? null);
   const [description, setDescription] = useState(seed?.description ?? "");
   const [emoji, setEmoji] = useState(seed?.emoji ?? "🧾");
 
-  // equal-category participants
+  // single-bill participants (equal split)
   const [participants, setParticipants] = useState<string[]>(seed?.participants ?? memberIds);
-  // "Night out" multi-bucket: food is the leftover, add-ons keyed by bucket
-  const [foodSet, setFoodSet] = useState<string[]>(seed?.foodSet ?? memberIds);
-  const [vegAmount, setVegAmount] = useState(seed?.vegAmount ?? "");
+  // mixed-bill buckets, keyed by BucketKind
   const [bucketAmounts, setBucketAmounts] = useState<Record<string, string>>(seed?.bucketAmounts ?? {});
   const [bucketSets, setBucketSets] = useState<Record<string, string[]>>(seed?.bucketSets ?? {});
   // advanced
@@ -87,10 +89,10 @@ function AddExpenseWizard({
   const [extra, setExtra] = useState(seed?.extra ?? "");
 
   const enteredAmount = parseFloat(amount) || 0;
-  const cat = category && category !== "advanced" ? getCategory(category) : null;
+  const tmpl = template && template !== "advanced" ? getTemplate(template) ?? null : null;
 
   const config: SplitConfig = useMemo(() => {
-    if (category === "advanced") {
+    if (template === "advanced") {
       if (advMethod === "shares")
         return {
           method: "shares",
@@ -103,42 +105,20 @@ function AddExpenseWizard({
         extraLabel: "Tax & tip",
       };
     }
-    if (cat?.kind === "buckets") {
-      const addOns = MIXED_BUCKETS.map((b) => ({
-        b,
-        amt: parseFloat(bucketAmounts[b.key] || "") || 0,
-      })).filter((x) => x.amt > 0);
-      const addOnTotal = addOns.reduce((s, x) => s + x.amt, 0);
-      const food = round2(enteredAmount - addOnTotal);
-      const lines: ItemLine[] = [];
-
-      if (food > 0.005) {
-        const veg = Math.min(Math.max(parseFloat(vegAmount) || 0, 0), food);
-        const vegPeople = foodSet.filter((id) => person(id).tags.includes("veg"));
-        if (veg > 0.005 && vegPeople.length) {
-          // diet-split: veg eaters cover the veg dishes, non-veg eaters the rest
-          const nonVeg = round2(food - veg);
-          const nonVegPeople = foodSet.filter((id) => !person(id).tags.includes("veg"));
-          lines.push({ id: "vegfood", name: "Veg food", amount: veg, participantIds: vegPeople });
-          if (nonVeg > 0.005 && nonVegPeople.length)
-            lines.push({ id: "food", name: "Non-veg food", amount: nonVeg, participantIds: nonVegPeople });
-        } else {
-          lines.push({ id: "food", name: "Food", amount: food, participantIds: foodSet });
-        }
-      }
-
-      addOns.forEach((x) =>
-        lines.push({
-          id: x.b.key,
-          name: x.b.label,
+    if (billMode === "mixed" && tmpl?.buckets) {
+      const lines: ItemLine[] = tmpl.buckets
+        .map((k) => ({ k, amt: parseFloat(bucketAmounts[k] || "") || 0 }))
+        .filter((x) => x.amt > 0)
+        .map((x) => ({
+          id: x.k,
+          name: BUCKET_DEFS[x.k].label,
           amount: x.amt,
-          participantIds: bucketSets[x.b.key] ?? [],
-        }),
-      );
+          participantIds: bucketSets[x.k] ?? [],
+        }));
       return { method: "itemized", extra: 0, items: lines };
     }
     return { method: "equal", participantIds: participants };
-  }, [category, cat, advMethod, units, items, extra, bucketAmounts, bucketSets, vegAmount, enteredAmount, foodSet, participants, person, memberIds]);
+  }, [template, billMode, tmpl, advMethod, units, items, extra, bucketAmounts, bucketSets, participants, memberIds]);
 
   const preview = useMemo(
     () => resolveExpense(config, enteredAmount),
@@ -148,50 +128,66 @@ function AddExpenseWizard({
   const shareOf = (pid: string) =>
     preview.splits.find((s) => s.personId === pid)?.amount ?? 0;
 
-  // for "Night out": how much of the total is still unallocated (becomes Food)
-  const addOnTotal = MIXED_BUCKETS.reduce(
-    (s, b) => s + (parseFloat(bucketAmounts[b.key] || "") || 0),
-    0,
-  );
-  const foodLeftover = round2(enteredAmount - addOnTotal);
-  const overAllocated = cat?.kind === "buckets" && foodLeftover < -0.005;
-  const vegMembers = members.some((m) => m.tags.includes("veg"));
-  const vegNum = parseFloat(vegAmount) || 0;
-  const vegOver = cat?.kind === "buckets" && vegNum > Math.max(0, foodLeftover) + 0.005;
+  const step2Valid =
+    billMode === "mixed"
+      ? template !== null
+      : template === "advanced"
+        ? enteredAmount > 0
+        : enteredAmount > 0 && template !== null && (!tmpl?.subChoice || bucketKind !== null);
+  const canSave = description.trim().length > 0 && totalAmount > 0 && preview.splits.length > 0;
 
-  const step1Valid = enteredAmount > 0 && category !== null;
-  const canSave =
-    description.trim().length > 0 &&
-    totalAmount > 0 &&
-    preview.splits.length > 0 &&
-    !overAllocated &&
-    !vegOver;
+  const chooseBillMode = (mode: BillMode) => {
+    if (mode !== billMode) {
+      setTemplate(null);
+      setBucketKind(null);
+    }
+    setBillMode(mode);
+    setStep(2);
+  };
 
-  const chooseCategory = (key: Cat) => {
-    setCategory(key);
+  const chooseTemplate = (key: string) => {
+    const changingTemplate = key !== template;
+    setTemplate(key);
     if (key === "advanced") {
+      setBucketKind(null);
       setEmoji("🧾");
       setDescription("");
       setUnits(Object.fromEntries(memberIds.map((m) => [m, 1])));
       setItems([{ id: rid(), name: "", amount: 0, participantIds: memberIds }]);
-    } else {
-      const c = getCategory(key)!;
-      setEmoji(c.emoji);
-      setDescription(c.label);
-      if (c.kind === "equal") setParticipants(selectForCategory(c, members));
-      else {
-        setFoodSet(memberIds);
-        setVegAmount("");
-        setBucketAmounts({});
-        setBucketSets(
-          Object.fromEntries(MIXED_BUCKETS.map((b) => [b.key, membersWithTag(members, b.tag)])),
-        );
-      }
+      return;
     }
+    const t = getTemplate(key)!;
+    if (t.mode === "mixed") {
+      setBucketKind(null);
+      setEmoji(t.emoji);
+      setDescription(t.label);
+      setBucketAmounts({});
+      setBucketSets(Object.fromEntries((t.buckets ?? []).map((k) => [k, selectForBucket(k, members)])));
+      return;
+    }
+    if (t.bucket) {
+      setBucketKind(t.bucket);
+      setEmoji(t.emoji);
+      setDescription(t.label);
+      setParticipants(selectForBucket(t.bucket, members));
+      return;
+    }
+    // Food / Drinks — wait for the Veg/Non-veg or Alcoholic/Non-alcoholic sub-choice
+    if (changingTemplate) setBucketKind(null);
+  };
+
+  const chooseBucketKind = (kind: BucketKind) => {
+    setBucketKind(kind);
+    const def = BUCKET_DEFS[kind];
+    setEmoji(def.emoji);
+    setDescription(def.label);
+    setParticipants(selectForBucket(kind, members));
   };
 
   const save = () => {
     if (!canSave) return;
+    const categoryKey =
+      template === "advanced" ? "advanced" : billMode === "mixed" ? template! : bucketKind ?? "other";
     const data = {
       groupId: group.id,
       description: description.trim(),
@@ -200,7 +196,7 @@ function AddExpenseWizard({
       paidBy,
       splits: preview.splits,
       config,
-      category: category ?? undefined,
+      category: categoryKey,
     };
     if (editExpense) updateExpense(editExpense.id, data);
     else addExpense(data);
@@ -215,7 +211,9 @@ function AddExpenseWizard({
   };
 
   const back = () => (step > 1 ? setStep(step - 1) : router.back());
-  const TITLES = editExpense ? ["Edit expense", "Edit split"] : ["Add expense", "Who's in?"];
+  const TITLES = editExpense
+    ? ["Edit expense", "Edit expense", "Edit split"]
+    : ["Bill type", "Add expense", "Who's in?"];
 
   return (
     <main className="flex flex-1 flex-col">
@@ -229,35 +227,67 @@ function AddExpenseWizard({
             Delete
           </button>
         ) : (
-          <span className="w-14 text-right text-sm font-bold text-muted">{step}/2</span>
+          <span className="w-14 text-right text-sm font-bold text-muted">{step}/3</span>
         )}
       </header>
 
       <div className="mx-5 mt-3 h-1.5 overflow-hidden rounded-full bg-surface-2">
         <div
           className="h-full rounded-full bg-gradient-to-r from-primary to-primary-strong transition-all"
-          style={{ width: `${(step / 2) * 100}%` }}
+          style={{ width: `${(step / 3) * 100}%` }}
         />
       </div>
 
       <div className="flex flex-1 flex-col gap-6 px-5 pt-6">
-        {/* STEP 1 — amount + paid by */}
+        {/* STEP 1 — single bill or mixed bill? */}
         {step === 1 && (
-          <>
-            <div className="flex flex-col items-center gap-1 py-2">
-              <div className="flex items-center gap-1">
-                <span className="text-3xl font-black text-muted">$</span>
-                <input
-                  autoFocus
-                  inputMode="decimal"
-                  placeholder="0.00"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))}
-                  onKeyDown={(e) => e.key === "Enter" && step1Valid && setStep(2)}
-                  className="w-48 bg-transparent text-center text-5xl font-black tracking-tight outline-none placeholder:text-border"
-                />
+          <div className="flex flex-1 flex-col justify-center gap-3 pb-10">
+            <p className="mb-1 px-1 text-center text-sm font-bold text-muted">What kind of bill is this?</p>
+            <button
+              onClick={() => chooseBillMode("single")}
+              className="flex items-center gap-3 rounded-3xl border border-border bg-surface p-4 text-left shadow-sm transition-all hover:border-primary/40 active:scale-[0.99]"
+            >
+              <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-surface-2 text-2xl">🧾</span>
+              <div className="flex-1">
+                <p className="font-extrabold">Single bill</p>
+                <p className="text-[11px] font-semibold text-muted">One purpose — food, drinks, or something else</p>
               </div>
-            </div>
+              <span className="text-primary">→</span>
+            </button>
+            <button
+              onClick={() => chooseBillMode("mixed")}
+              className="flex items-center gap-3 rounded-3xl border border-border bg-surface p-4 text-left shadow-sm transition-all hover:border-primary/40 active:scale-[0.99]"
+            >
+              <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-surface-2 text-2xl">🧺</span>
+              <div className="flex-1">
+                <p className="font-extrabold">Mixed bill</p>
+                <p className="text-[11px] font-semibold text-muted">Splits across food, drinks, smokes — auto-tallied</p>
+              </div>
+              <span className="text-primary">→</span>
+            </button>
+          </div>
+        )}
+
+        {/* STEP 2 — amount (single only) + paid by + template */}
+        {step === 2 && billMode && (
+          <>
+            {billMode === "single" && (
+              <div className="flex flex-col items-center gap-1 py-2">
+                <div className="flex items-center gap-1">
+                  <span className="text-3xl font-black text-muted">$</span>
+                  <input
+                    autoFocus
+                    inputMode="decimal"
+                    placeholder="0.00"
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))}
+                    onKeyDown={(e) => e.key === "Enter" && step2Valid && setStep(3)}
+                    className="w-48 bg-transparent text-center text-5xl font-black tracking-tight outline-none placeholder:text-border"
+                  />
+                </div>
+              </div>
+            )}
+
             <section>
               <p className="mb-2 px-1 text-sm font-bold text-muted">Paid by</p>
               <div className="no-scrollbar flex gap-2 overflow-x-auto pb-1">
@@ -280,52 +310,103 @@ function AddExpenseWizard({
               </div>
             </section>
 
-            {/* category grid */}
-            <section className="flex flex-col gap-3">
-              <p className="px-1 text-sm font-bold text-muted">Category</p>
-              <div className="grid grid-cols-2 gap-3">
-                {CATEGORIES.map((c) => {
-                  const sel = category === c.key;
+            {billMode === "single" ? (
+              <section className="flex flex-col gap-3">
+                <p className="px-1 text-sm font-bold text-muted">Category</p>
+                {SINGLE_TEMPLATES.map((t) => {
+                  const sel = template === t.key;
+                  return (
+                    <div key={t.key} className="flex flex-col gap-2">
+                      <button
+                        onClick={() => chooseTemplate(t.key)}
+                        className={`flex items-center gap-3 rounded-3xl border p-4 text-left shadow-sm transition-all ${
+                          sel
+                            ? "border-primary bg-primary-soft"
+                            : "border-border bg-surface hover:border-primary/40"
+                        }`}
+                      >
+                        <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-surface-2 text-2xl">
+                          {t.emoji}
+                        </span>
+                        <div className="flex-1">
+                          <p className="font-extrabold leading-tight">{t.label}</p>
+                          <p className="text-[11px] font-semibold text-muted">
+                            {t.hint ?? (t.subChoice ? "Choose below" : "")}
+                          </p>
+                        </div>
+                      </button>
+                      {sel && t.subChoice && (
+                        <div className="flex gap-2 pl-1">
+                          {t.subChoice.map((k) => {
+                            const def = BUCKET_DEFS[k];
+                            const active = bucketKind === k;
+                            return (
+                              <button
+                                key={k}
+                                onClick={() => chooseBucketKind(k)}
+                                className={`flex-1 rounded-2xl border px-3 py-2.5 text-center text-sm font-bold transition-all ${
+                                  active
+                                    ? "border-primary bg-primary-soft text-primary"
+                                    : "border-border bg-surface text-foreground"
+                                }`}
+                              >
+                                {def.emoji} {def.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                <button
+                  onClick={() => chooseTemplate("advanced")}
+                  className={`flex items-center gap-3 rounded-3xl border p-4 text-left ${
+                    template === "advanced"
+                      ? "border-primary bg-primary-soft"
+                      : "border-dashed border-border bg-surface/60"
+                  }`}
+                >
+                  <span className="grid h-11 w-11 place-items-center rounded-2xl bg-surface-2 text-2xl">⚙️</span>
+                  <div className="flex-1">
+                    <p className="font-extrabold">Custom / advanced</p>
+                    <p className="text-[11px] font-semibold text-muted">By shares, or an itemized bill</p>
+                  </div>
+                  <span className="text-primary">→</span>
+                </button>
+              </section>
+            ) : (
+              <section className="flex flex-col gap-3">
+                <p className="px-1 text-sm font-bold text-muted">Category</p>
+                {MIXED_TEMPLATES.map((t) => {
+                  const sel = template === t.key;
                   return (
                     <button
-                      key={c.key}
-                      onClick={() => chooseCategory(c.key)}
-                      className={`flex flex-col items-start gap-2 rounded-3xl border p-4 text-left shadow-sm transition-all ${
+                      key={t.key}
+                      onClick={() => chooseTemplate(t.key)}
+                      className={`flex items-center gap-3 rounded-3xl border p-4 text-left shadow-sm transition-all ${
                         sel
                           ? "border-primary bg-primary-soft"
                           : "border-border bg-surface hover:border-primary/40"
                       }`}
                     >
-                      <span className="grid h-11 w-11 place-items-center rounded-2xl bg-surface-2 text-2xl">
-                        {c.emoji}
+                      <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-surface-2 text-2xl">
+                        {t.emoji}
                       </span>
-                      <span className="font-extrabold leading-tight">{c.label}</span>
-                      <span className="text-[11px] font-semibold text-muted">{c.hint}</span>
+                      <div className="flex-1">
+                        <p className="font-extrabold leading-tight">{t.label}</p>
+                        <p className="text-[11px] font-semibold text-muted">{t.hint}</p>
+                      </div>
                     </button>
                   );
                 })}
-              </div>
-              <button
-                onClick={() => chooseCategory("advanced")}
-                className={`flex items-center gap-3 rounded-3xl border p-4 text-left ${
-                  category === "advanced"
-                    ? "border-primary bg-primary-soft"
-                    : "border-dashed border-border bg-surface/60"
-                }`}
-              >
-                <span className="grid h-11 w-11 place-items-center rounded-2xl bg-surface-2 text-2xl">⚙️</span>
-                <div className="flex-1">
-                  <p className="font-extrabold">Custom / advanced</p>
-                  <p className="text-[11px] font-semibold text-muted">By shares, or an itemized bill</p>
-                </div>
-                <span className="text-primary">→</span>
-              </button>
-            </section>
+              </section>
+            )}
           </>
         )}
 
-        {/* STEP 2 — who's in / adjust */}
-        {step === 2 && category && (
+        {/* STEP 3 — who's in / adjust */}
+        {step === 3 && template && (
           <section className="flex flex-col gap-4">
             {/* description + emoji */}
             <div className="flex items-center gap-3 rounded-3xl border border-border bg-surface p-2 shadow-sm">
@@ -341,8 +422,8 @@ function AddExpenseWizard({
               <span className="pr-3 font-black">{money(totalAmount)}</span>
             </div>
 
-            {/* EQUAL category */}
-            {cat?.kind === "equal" && (
+            {/* SINGLE bill — equal split among the auto-picked bucket */}
+            {billMode === "single" && template !== "advanced" && (
               <EqualPicker
                 memberIds={memberIds}
                 meId={state.meId}
@@ -353,79 +434,23 @@ function AddExpenseWizard({
               />
             )}
 
-            {/* NIGHT OUT — multi-bucket */}
-            {cat?.kind === "buckets" && (
+            {/* MIXED bill — one row per bucket that applies */}
+            {billMode === "mixed" && tmpl?.buckets && (
               <div className="flex flex-col gap-4">
                 <p className="px-1 text-xs font-semibold text-muted">
-                  Enter what was spent on each add-on — the rest is food.
+                  Enter what was spent on each part that applies — skip the rest.
                   ✨ Each bucket auto-picks people from their profiles; tap the chips to adjust for tonight.
                 </p>
-
-                {/* Food (leftover) */}
-                <div className="rounded-2xl border border-border bg-surface p-3">
-                  <div className="flex items-center justify-between">
-                    <p className="font-bold">🍔 Food</p>
-                    <span className={`font-black ${overAllocated ? "text-negative" : "text-positive"}`}>
-                      {money(foodLeftover)}
-                    </span>
-                  </div>
-                  {overAllocated ? (
-                    <p className="mt-1 text-[11px] font-bold text-negative">
-                      Add-ons exceed the total by {money(-foodLeftover)} — lower one.
-                    </p>
-                  ) : (
-                    <>
-                      <BucketToggles
-                        memberIds={memberIds}
-                        meId={state.meId}
-                        person={person}
-                        selected={foodSet}
-                        setSelected={setFoodSet}
-                      />
-                      {vegMembers && (
-                        <div className="mt-3 border-t border-border pt-3">
-                          <div className="flex items-center justify-between gap-2">
-                            <p className="text-sm font-bold">🥗 of which vegetarian</p>
-                            <div className="flex items-center gap-1 rounded-full bg-surface-2 px-3 py-1.5">
-                              <span className="text-sm font-black text-muted">$</span>
-                              <input
-                                inputMode="decimal"
-                                placeholder="0"
-                                value={vegAmount}
-                                onChange={(e) => setVegAmount(e.target.value.replace(/[^0-9.]/g, ""))}
-                                className="w-16 bg-transparent text-right text-sm font-black outline-none"
-                              />
-                            </div>
-                          </div>
-                          {vegOver ? (
-                            <p className="mt-1 text-[11px] font-bold text-negative">
-                              Veg amount is more than the food total — lower it.
-                            </p>
-                          ) : vegNum > 0.005 ? (
-                            <p className="mt-1 text-[11px] font-semibold text-muted">
-                              Veg {money(vegNum)} → veg eaters · rest {money(round2(foodLeftover - vegNum))} → non-veg eaters
-                            </p>
-                          ) : (
-                            <p className="mt-1 text-[11px] font-semibold text-muted">
-                              Leave 0 if everyone shares the food.
-                            </p>
-                          )}
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
-
-                {/* Add-on buckets */}
-                {MIXED_BUCKETS.map((b) => {
-                  const val = bucketAmounts[b.key] || "";
+                {tmpl.buckets.map((k) => {
+                  const def = BUCKET_DEFS[k];
+                  const val = bucketAmounts[k] || "";
                   const active = (parseFloat(val) || 0) > 0;
-                  const set = bucketSets[b.key] ?? [];
+                  const set = bucketSets[k] ?? [];
                   return (
-                    <div key={b.key} className="rounded-2xl border border-border bg-surface p-3">
+                    <div key={k} className="rounded-2xl border border-border bg-surface p-3">
                       <div className="flex items-center justify-between gap-2">
                         <p className="font-bold">
-                          {b.emoji} {b.label}
+                          {def.emoji} {def.label}
                         </p>
                         <div className="flex items-center gap-1 rounded-full bg-surface-2 px-3 py-1.5">
                           <span className="text-sm font-black text-muted">$</span>
@@ -434,7 +459,7 @@ function AddExpenseWizard({
                             placeholder="0"
                             value={val}
                             onChange={(e) =>
-                              setBucketAmounts((prev) => ({ ...prev, [b.key]: e.target.value.replace(/[^0-9.]/g, "") }))
+                              setBucketAmounts((prev) => ({ ...prev, [k]: e.target.value.replace(/[^0-9.]/g, "") }))
                             }
                             className="w-16 bg-transparent text-right text-sm font-black outline-none"
                           />
@@ -446,14 +471,14 @@ function AddExpenseWizard({
                           meId={state.meId}
                           person={person}
                           selected={set}
-                          setSelected={(v) => setBucketSets((prev) => ({ ...prev, [b.key]: v }))}
+                          setSelected={(v) => setBucketSets((prev) => ({ ...prev, [k]: v }))}
                         />
                       )}
                     </div>
                   );
                 })}
 
-                {preview.splits.length > 0 && !overAllocated && (
+                {preview.splits.length > 0 && (
                   <div className="flex flex-col gap-1.5 rounded-2xl bg-surface-2 p-3">
                     <p className="mb-1 text-xs font-bold text-muted">Each person pays</p>
                     {preview.splits.map((s) => (
@@ -471,7 +496,7 @@ function AddExpenseWizard({
             )}
 
             {/* ADVANCED */}
-            {category === "advanced" && (
+            {template === "advanced" && (
               <AdvancedEditor
                 memberIds={memberIds}
                 meId={state.meId}
@@ -495,10 +520,10 @@ function AddExpenseWizard({
           </section>
         )}
 
-        {/* footer continue on step 1 */}
-        {step === 1 && (
+        {/* footer continue on step 2 */}
+        {step === 2 && (
           <div className="mt-auto pb-4">
-            <Button onClick={() => setStep(2)} disabled={!step1Valid} size="lg" fullWidth>
+            <Button onClick={() => setStep(3)} disabled={!step2Valid} size="lg" fullWidth>
               Continue
             </Button>
           </div>
@@ -766,10 +791,10 @@ type WizardSeed = {
   paidBy: string;
   description: string;
   emoji: string;
-  category: Cat;
+  billMode: BillMode;
+  template: string;
+  bucketKind?: BucketKind;
   participants?: string[];
-  foodSet?: string[];
-  vegAmount?: string;
   bucketAmounts?: Record<string, string>;
   bucketSets?: Record<string, string[]>;
   advMethod?: "shares" | "itemized";
@@ -785,60 +810,75 @@ function initFromExpense(e: Expense, memberIds: string[], members: Person[]): Wi
   if (cfg.method === "shares") {
     return {
       ...base,
-      category: "advanced",
+      billMode: "single",
+      template: "advanced",
       advMethod: "shares",
       units: Object.fromEntries(cfg.shares.map((s) => [s.personId, s.units])),
     };
   }
-  if (cfg.method !== "itemized") {
-    // "equal" (or any non-itemized) → an equal split among its participants
-    const participants = cfg.method === "equal" ? cfg.participantIds : memberIds;
-    return { ...base, category: e.category ?? "misc", participants };
-  }
 
-  // itemized — "Night out" if its lines map onto food/veg + known buckets, else advanced
-  const mixedIds = ["food", "vegfood", ...MIXED_BUCKETS.map((b) => b.key)];
-  const isMixed =
-    e.category === "mixed" ||
-    (!e.category && cfg.items.length > 0 && cfg.items.every((it) => mixedIds.includes(it.id)));
-
-  if (isMixed) {
-    const foodItem = cfg.items.find((it) => it.id === "food");
-    const vegItem = cfg.items.find((it) => it.id === "vegfood");
-    // foodSet = everyone who shared any food (veg + non-veg diners)
-    const foodSet = Array.from(
-      new Set([...(vegItem?.participantIds ?? []), ...(foodItem?.participantIds ?? [])]),
-    );
-    const bucketAmounts: Record<string, string> = {};
-    const bucketSets: Record<string, string[]> = {};
-    MIXED_BUCKETS.forEach((b) => {
-      const it = cfg.items.find((x) => x.id === b.key);
-      if (it) {
-        bucketAmounts[b.key] = String(it.amount);
-        bucketSets[b.key] = it.participantIds;
-      } else {
-        bucketSets[b.key] = membersWithTag(members, b.tag);
-      }
-    });
+  if (cfg.method === "equal") {
+    const bucketKind: BucketKind = isBucketKind(e.category) ? e.category : "other";
+    const template =
+      bucketKind === "vegfood" || bucketKind === "nonvegfood"
+        ? "food"
+        : bucketKind === "alcohol" || bucketKind === "nonalcoholic"
+          ? "drinks"
+          : "other";
     return {
       ...base,
-      category: "mixed",
-      foodSet: foodSet.length ? foodSet : memberIds,
-      vegAmount: vegItem ? String(vegItem.amount) : "",
-      bucketAmounts,
-      bucketSets,
+      billMode: "single",
+      template,
+      bucketKind,
+      participants: cfg.participantIds,
     };
   }
 
-  return {
-    ...base,
-    category: "advanced",
-    advMethod: "itemized",
-    items: cfg.items.length
-      ? cfg.items
-      : [{ id: rid(), name: "", amount: 0, participantIds: memberIds }],
-    extra: cfg.extra ? String(cfg.extra) : "",
-  };
+  if (cfg.method === "itemized") {
+    // "nightout" / "groceries" (or the legacy "mixed" key) → a mixed bill
+    const mixedTemplateKey =
+      e.category === "nightout" || e.category === "groceries"
+        ? e.category
+        : e.category === "mixed"
+          ? "nightout"
+          : undefined;
+
+    if (mixedTemplateKey) {
+      const mt = getTemplate(mixedTemplateKey)!;
+      const bucketAmounts: Record<string, string> = {};
+      const bucketSets: Record<string, string[]> = {};
+      (mt.buckets ?? []).forEach((k) => {
+        const it = cfg.items.find((x) => x.id === k);
+        if (it) {
+          bucketAmounts[k] = String(it.amount);
+          bucketSets[k] = it.participantIds;
+        } else {
+          bucketSets[k] = selectForBucket(k, members);
+        }
+      });
+      return {
+        ...base,
+        billMode: "mixed",
+        template: mixedTemplateKey,
+        bucketAmounts,
+        bucketSets,
+      };
+    }
+
+    return {
+      ...base,
+      billMode: "single",
+      template: "advanced",
+      advMethod: "itemized",
+      items: cfg.items.length
+        ? cfg.items
+        : [{ id: rid(), name: "", amount: 0, participantIds: memberIds }],
+      extra: cfg.extra ? String(cfg.extra) : "",
+    };
+  }
+
+  // fallback (e.g. a "nights" config, which this wizard doesn't author) — treat as a plain equal split
+  return { ...base, billMode: "single", template: "other", bucketKind: "other", participants: memberIds };
 }
 
 /* ---------- small bits ---------- */

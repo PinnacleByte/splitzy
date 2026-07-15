@@ -1,40 +1,67 @@
 import type { Person } from "./types";
 
-export type Category = {
+export type BucketKind = "vegfood" | "nonvegfood" | "alcohol" | "nonalcoholic" | "cigarettes" | "other";
+
+export const BUCKET_DEFS: Record<
+  BucketKind,
+  { emoji: string; label: string; includeTag?: string; excludeTag?: string }
+> = {
+  vegfood: { emoji: "🥗", label: "Veg food" },
+  nonvegfood: { emoji: "🍖", label: "Non-veg food", excludeTag: "veg" },
+  alcohol: { emoji: "🍺", label: "Alcohol", includeTag: "drinker" },
+  nonalcoholic: { emoji: "🥤", label: "Soft drinks", includeTag: "softdrinks" },
+  cigarettes: { emoji: "🚬", label: "Cigarettes", includeTag: "smoker" },
+  other: { emoji: "🎲", label: "Other" },
+};
+
+export type BillTemplate = {
   key: string;
   emoji: string;
   label: string;
-  /** how participants are auto-picked from the members */
-  kind: "equal" | "buckets";
-  /** only members WITH this tag are auto-selected (fallback: everyone) */
-  includeTag?: string;
-  /** members WITH this tag are auto-excluded */
-  excludeTag?: string;
+  mode: "single" | "mixed";
   hint?: string;
+  /** single-bill, no sub-choice (e.g. "Other") */
+  bucket?: BucketKind;
+  /** single-bill, pick one of these (e.g. Food → Veg/Non-veg) */
+  subChoice?: BucketKind[];
+  /** mixed-bill, the bucket rows to render */
+  buckets?: BucketKind[];
 };
 
-export const CATEGORIES: Category[] = [
-  { key: "food", emoji: "🍔", label: "Only food", kind: "equal", hint: "Split among everyone" },
-  { key: "mixed", emoji: "🌆", label: "Night out", kind: "buckets", hint: "Food + add-ons, auto-split" },
-  { key: "nonveg", emoji: "🍖", label: "Non-veg meal", kind: "equal", excludeTag: "veg", hint: "Everyone except veg" },
-  { key: "alcohol", emoji: "🍺", label: "Alcohol", kind: "equal", includeTag: "drinker", hint: "Drinkers only" },
-  { key: "softdrinks", emoji: "🥤", label: "Soft drinks", kind: "equal", includeTag: "softdrinks", hint: "Whoever had them" },
-  { key: "cigarettes", emoji: "🚬", label: "Cigarettes", kind: "equal", includeTag: "smoker", hint: "Smokers only" },
-  { key: "groceries", emoji: "🛒", label: "Groceries", kind: "equal", hint: "Split among everyone" },
-  { key: "misc", emoji: "🎲", label: "Misc", kind: "equal", hint: "Split among everyone" },
+export const SINGLE_TEMPLATES: BillTemplate[] = [
+  { key: "food", emoji: "🍔", label: "Food", mode: "single", subChoice: ["vegfood", "nonvegfood"] },
+  { key: "drinks", emoji: "🍹", label: "Drinks", mode: "single", subChoice: ["alcohol", "nonalcoholic"] },
+  { key: "other", emoji: "🎲", label: "Other", mode: "single", bucket: "other", hint: "Split among everyone" },
 ];
 
-/**
- * The add-on buckets available inside a "Night out" expense. Whatever total is
- * left after these becomes the shared Food bucket (split among everyone).
- */
-export const MIXED_BUCKETS: { key: string; emoji: string; label: string; tag: string }[] = [
-  { key: "alcohol", emoji: "🍺", label: "Alcohol", tag: "drinker" },
-  { key: "cigarettes", emoji: "🚬", label: "Cigarettes", tag: "smoker" },
-  { key: "softdrinks", emoji: "🥤", label: "Soft drinks", tag: "softdrinks" },
+export const MIXED_TEMPLATES: BillTemplate[] = [
+  {
+    key: "nightout",
+    emoji: "🌆",
+    label: "Night out",
+    mode: "mixed",
+    hint: "Food + drinks + smokes",
+    buckets: ["nonvegfood", "vegfood", "alcohol", "cigarettes", "nonalcoholic"],
+  },
+  {
+    key: "groceries",
+    emoji: "🛒",
+    label: "Groceries",
+    mode: "mixed",
+    hint: "Itemized, per shopper",
+    buckets: ["nonvegfood", "vegfood", "alcohol", "cigarettes", "nonalcoholic", "other"],
+  },
 ];
 
-export const getCategory = (key: string) => CATEGORIES.find((c) => c.key === key);
+export const getTemplate = (key: string): BillTemplate | undefined =>
+  SINGLE_TEMPLATES.find((t) => t.key === key) ?? MIXED_TEMPLATES.find((t) => t.key === key);
+
+/** Label + emoji for any saved `Expense.category` key — a bucket kind or a template key. */
+export function getCategoryMeta(key: string): { label: string; emoji: string } | undefined {
+  if (key in BUCKET_DEFS) return BUCKET_DEFS[key as BucketKind];
+  const t = getTemplate(key);
+  return t ? { label: t.label, emoji: t.emoji } : undefined;
+}
 
 /** Member ids that carry a tag; falls back to everyone if nobody is tagged. */
 export function membersWithTag(members: Person[], tag: string): string[] {
@@ -42,13 +69,14 @@ export function membersWithTag(members: Person[], tag: string): string[] {
   return tagged.length ? tagged : members.map((m) => m.id);
 }
 
-/** Auto-select the member ids a category applies to, given the group's people. */
-export function selectForCategory(cat: Category, members: Person[]): string[] {
+/** Auto-select the member ids a bucket applies to, given the group's people. */
+export function selectForBucket(kind: BucketKind, members: Person[]): string[] {
+  const def = BUCKET_DEFS[kind];
   const all = members.map((m) => m.id);
-  if (cat.excludeTag) {
-    const kept = members.filter((m) => !m.tags.includes(cat.excludeTag!)).map((m) => m.id);
+  if (def.excludeTag) {
+    const kept = members.filter((m) => !m.tags.includes(def.excludeTag!)).map((m) => m.id);
     return kept.length ? kept : all;
   }
-  if (cat.includeTag) return membersWithTag(members, cat.includeTag);
+  if (def.includeTag) return membersWithTag(members, def.includeTag);
   return all;
 }
