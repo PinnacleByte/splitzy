@@ -5,8 +5,8 @@
 create extension if not exists pgcrypto;
 
 -- =========================================================================
--- Cleanup: the self-serve invite-link system was replaced by admin-created
--- accounts (lib/adminActions.ts) — drop its now-unused objects.
+-- Cleanup: the old self-serve invite-link system was replaced by direct
+-- account creation (lib/accountActions.ts) — drop its now-unused objects.
 -- =========================================================================
 
 drop function if exists accept_invite(text);
@@ -28,7 +28,7 @@ create table if not exists profiles (
 );
 
 -- Symmetric friend graph: both (a,b) and (b,a) rows are written together
--- by addFriendAccount() (lib/adminActions.ts, via the service-role client).
+-- by addFriendAccount() (lib/accountActions.ts, via the service-role client).
 -- "My friends" == everyone I have a connections row with.
 create table if not exists connections (
   user_id uuid not null references profiles (id) on delete cascade,
@@ -219,7 +219,7 @@ create policy "profiles_update" on profiles for update
   with check (id = auth.uid() or is_connected(id));
 
 -- connections: readable by either side; writes only via the service-role
--- client in addFriendAccount() (lib/adminActions.ts), which bypasses RLS.
+-- client in addFriendAccount() (lib/accountActions.ts), which bypasses RLS.
 drop policy if exists "connections_select" on connections;
 create policy "connections_select" on connections for select
   using (user_id = auth.uid() or friend_id = auth.uid());

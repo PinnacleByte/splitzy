@@ -49,7 +49,6 @@ function StayEditor({ group }: { group: Group }) {
     };
 
   const available = state.people.filter((p) => !group.memberIds.includes(p.id));
-  const isAdmin = state.meEmail === process.env.NEXT_PUBLIC_ADMIN_EMAIL;
 
   const commitPrice = (v: string) => {
     setPriceText(v);
@@ -165,9 +164,7 @@ function StayEditor({ group }: { group: Group }) {
                   ))}
                 </div>
               )}
-              {isAdmin && (
-                <AddFriendForm groupId={group.id} label="Add someone new to this trip" />
-              )}
+              <AddFriendForm groupId={group.id} label="Add someone new to this trip" />
             </div>
           )}
 

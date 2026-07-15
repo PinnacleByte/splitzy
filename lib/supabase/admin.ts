@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 
 /**
  * Service-role client — bypasses RLS entirely. Only ever call this from
- * within an already-authorized Server Action (see lib/adminActions.ts).
+ * within a Server Action (see lib/accountActions.ts).
  * Never import this from a Client Component.
  */
 export function createAdminClient() {

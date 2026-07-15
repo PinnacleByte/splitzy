@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Button } from "@/components/Button";
-import { addFriendAccount } from "@/lib/adminActions";
+import { addFriendAccount } from "@/lib/accountActions";
 
 export function AddFriendForm({
   groupId,

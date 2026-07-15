@@ -203,7 +203,6 @@ function MembersRow({ group }: { group: Group }) {
   const { state, person, addMemberToGroup } = useStore();
   const [adding, setAdding] = useState(false);
   const available = state.people.filter((p) => !group.memberIds.includes(p.id));
-  const isAdmin = state.meEmail === process.env.NEXT_PUBLIC_ADMIN_EMAIL;
 
   // Staying groups add members (with dates) on the dedicated stay screen.
   if (group.stay) {
@@ -250,9 +249,7 @@ function MembersRow({ group }: { group: Group }) {
               ))}
             </div>
           )}
-          {isAdmin && (
-            <AddFriendForm groupId={group.id} label="Add someone new to this group" />
-          )}
+          <AddFriendForm groupId={group.id} label="Add someone new to this group" />
         </div>
       )}
     </div>

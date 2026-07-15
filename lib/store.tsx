@@ -18,6 +18,7 @@ import type {
   Settlement,
 } from "./types";
 import { createClient } from "./supabase/client";
+import { signUpAccount } from "./accountActions";
 
 const EMPTY_STATE: AppState = {
   meId: "",
@@ -51,6 +52,12 @@ type Store = {
   /** signs in on the same client instance the rest of the app reads from,
    * so state repopulates immediately instead of needing a hard refresh */
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
+  /** self-serve signup: creates the account (no email), then signs in */
+  signUp: (
+    name: string,
+    email: string,
+    password: string,
+  ) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
   addGroup: (data: {
     name: string;
@@ -86,6 +93,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const supabase = useMemo(() => createClient(), []);
   const [state, setState] = useState<AppState>(EMPTY_STATE);
   const [hydrated, setHydrated] = useState(false);
+  const [toasts, setToasts] = useState<{ id: string; message: string }[]>([]);
+
+  /** Surfaces a persistence failure as a dismissible toast instead of letting
+   * it vanish into the console — the optimistic local update already happened,
+   * so the user needs to know the server never got it. */
+  const pushError = useCallback((action: string, err: unknown) => {
+    console.error(`${action} failed:`, err);
+    const id = crypto.randomUUID();
+    const detail = err instanceof Error ? err.message : String(err);
+    setToasts((t) => [...t, { id, message: `Couldn't ${action}. ${detail}` }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 6000);
+  }, []);
 
   const load = useCallback(async () => {
     const {
@@ -258,6 +277,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return { error: error?.message ?? null };
     };
 
+    const signUp: Store["signUp"] = async (name, email, password) => {
+      const { error } = await signUpAccount({ name, email, password });
+      if (error) return { error };
+      // account created (no email) — sign in on this client so state populates
+      return signIn(email, password);
+    };
+
     const signOut: Store["signOut"] = async () => {
       await supabase.auth.signOut();
       setState(EMPTY_STATE);
@@ -310,7 +336,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             ),
           );
         }
-      })().catch((err) => console.error("addGroup failed to persist:", err));
+      })().catch((err) => pushError("create the group", err));
 
       return group;
     };
@@ -351,7 +377,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               ),
           );
         }
-      })().catch((err) => console.error("addMemberToGroup failed to persist:", err));
+      })().catch((err) => pushError("add them to the group", err));
     };
 
     const updateStay: Store["updateStay"] = (groupId, patch) => {
@@ -372,7 +398,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         .from("group_stays")
         .update(dbPatch)
         .eq("group_id", groupId)
-        .then(({ error }) => error && console.error(error));
+        .then(({ error }) => error && pushError("update the stay", new Error(error.message)));
     };
 
     const setMemberStay: Store["setMemberStay"] = (groupId, personId, dates) => {
@@ -394,7 +420,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           { group_id: groupId, person_id: personId, from: dates.from, to: dates.to },
           { onConflict: "group_id,person_id" },
         )
-        .then(({ error }) => error && console.error(error));
+        .then(({ error }) => error && pushError("update their dates", new Error(error.message)));
     };
 
     const toggleTag: Store["toggleTag"] = (personId, tag) => {
@@ -412,7 +438,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         .from("profiles")
         .update({ tags: next })
         .eq("id", personId)
-        .then(({ error }) => error && console.error(error));
+        .then(({ error }) => error && pushError("update that tag", new Error(error.message)));
     };
 
     const updateMyProfile: Store["updateMyProfile"] = (patch) => {
@@ -425,7 +451,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         .from("profiles")
         .update(patch)
         .eq("id", state.meId)
-        .then(({ error }) => error && console.error(error));
+        .then(({ error }) => error && pushError("update your profile", new Error(error.message)));
     };
 
     const addExpense: Store["addExpense"] = (data) => {
@@ -450,7 +476,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             e.splits.map((s) => ({ expense_id: e.id, person_id: s.personId, amount: s.amount })),
           ),
         );
-      })().catch((err) => console.error("addExpense failed to persist:", err));
+      })().catch((err) => pushError("save the expense", err));
 
       return e;
     };
@@ -482,7 +508,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             data.splits.map((s) => ({ expense_id: id, person_id: s.personId, amount: s.amount })),
           ),
         );
-      })().catch((err) => console.error("updateExpense failed to persist:", err));
+      })().catch((err) => pushError("save the expense", err));
     };
 
     const addSettlement: Store["addSettlement"] = (data) => {
@@ -498,7 +524,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           to_person: s0.to,
           amount: s0.amount,
         })
-        .then(({ error }) => error && console.error(error));
+        .then(({ error }) => error && pushError("record the settlement", new Error(error.message)));
 
       return s0;
     };
@@ -509,7 +535,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         .from("expenses")
         .delete()
         .eq("id", id)
-        .then(({ error }) => error && console.error(error));
+        .then(({ error }) => error && pushError("delete the expense", new Error(error.message)));
     };
 
     const deleteGroup: Store["deleteGroup"] = (id) => {
@@ -523,7 +549,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         .from("groups")
         .delete()
         .eq("id", id)
-        .then(({ error }) => error && console.error(error));
+        .then(({ error }) => error && pushError("delete the group", new Error(error.message)));
     };
 
     return {
@@ -532,6 +558,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       me: person(state.meId),
       person,
       signIn,
+      signUp,
       signOut,
       addGroup,
       toggleTag,
@@ -545,9 +572,31 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       deleteExpense,
       deleteGroup,
     };
-  }, [state, hydrated, supabase, load]);
+  }, [state, hydrated, supabase, load, pushError]);
 
-  return <StoreContext.Provider value={store}>{children}</StoreContext.Provider>;
+  return (
+    <StoreContext.Provider value={store}>
+      {children}
+      <div className="safe-top pointer-events-none fixed inset-x-0 top-0 z-50 flex flex-col items-center gap-2 px-4 pt-2">
+        {toasts.map((t) => (
+          <div
+            key={t.id}
+            className="animate-pop pointer-events-auto flex w-full max-w-md items-start gap-3 rounded-3xl border border-negative/30 bg-surface p-4 shadow-lg shadow-negative/10"
+          >
+            <span className="text-lg">⚠️</span>
+            <p className="flex-1 text-sm font-semibold text-foreground">{t.message}</p>
+            <button
+              onClick={() => setToasts((cur) => cur.filter((x) => x.id !== t.id))}
+              aria-label="Dismiss"
+              className="text-muted"
+            >
+              ✕
+            </button>
+          </div>
+        ))}
+      </div>
+    </StoreContext.Provider>
+  );
 }
 
 export function useStore() {
