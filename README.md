@@ -1,6 +1,6 @@
 # Splitzy
 
-A friendly Splitwise-style bill-splitter, built as an installable PWA for a small group of real friends — flexible splitting (single or mixed bills, shares, itemized, per-night hotel stays, with diet/drinker/smoker-aware auto-selection), auto-balanced or detailed settle-ups, per-member spend stats, admin-managed accounts, and multi-device sync backed by Supabase.
+A friendly Splitwise-style bill-splitter, built as an installable PWA for a small group of real friends — flexible splitting (single or mixed bills, shares, itemized, per-night hotel stays, with diet/drinker/smoker-aware auto-selection), auto-balanced or detailed settle-ups, per-member spend stats, self-serve accounts with per-user isolated friend circles, and multi-device sync backed by Supabase.
 
 ## Stack
 
@@ -26,7 +26,7 @@ A friendly Splitwise-style bill-splitter, built as an installable PWA for a smal
    cp .env.local.example .env.local
    ```
 
-   `SUPABASE_SERVICE_ROLE_KEY` is sensitive (bypasses Row Level Security) — server-only, never commit it, never expose it to the client. `NEXT_PUBLIC_ADMIN_EMAIL` is the one account allowed to add friends (see below).
+   `SUPABASE_SERVICE_ROLE_KEY` is sensitive (bypasses Row Level Security) — server-only, never commit it, never expose it to the client. It's used to create accounts via the Supabase admin API (see below).
 
 5. **Run the dev server**
 
@@ -34,7 +34,7 @@ A friendly Splitwise-style bill-splitter, built as an installable PWA for a smal
    npm run dev
    ```
 
-   Open [http://localhost:3000](http://localhost:3000) and sign in with the admin account's email + password.
+   Open [http://localhost:3000](http://localhost:3000) and use **Create account** to make the first account (name + email + password), or sign in if you already have one.
 
 ## How splitting works
 
@@ -54,15 +54,19 @@ Each group's **Balances** tab offers two views (toggle at the top):
 
 **Group stats** below the balances show what each member **paid** (fronted) versus their **share** (consumed), and badge the biggest individual payer. The math lives in [lib/balances.ts](lib/balances.ts).
 
-## How adding friends works
+## Accounts, friends, and isolated circles
 
-There's no self-serve signup — every account is created by the admin (`NEXT_PUBLIC_ADMIN_EMAIL`), which avoids depending on Supabase's rate-limited shared email sender entirely.
+Anyone can **create their own account** from `/login` → **Create account** (name + email + password). This starts a fresh, empty space — your own "circle" of friends and groups. Different circles never see each other: Row Level Security scopes every table to your friend connections and group memberships ([supabase/schema.sql](supabase/schema.sql)), so your dad running his own trip can't see your data and vice-versa.
 
-- **Friends** tab → **Add a friend**, or **New group** → **Add someone new**, or a group's **member list** → **Add someone new to this group** (admin-only; enforced both in the UI and server-side in the Server Action).
-- Fill in their name, email, and a temp password — this calls the Supabase Admin API (`lib/adminActions.ts`) to create a pre-confirmed account directly, no email round-trip. They're connected as your friend immediately (and added to the group, if launched from one).
-- Tell them their email + temp password out of band (text, in person). They sign in at `/login` and can change their password anytime from **Account → Change password**, and set their own display name from **Account** (tap the name).
+Account creation (both self-serve signup and adding a friend) goes through the Supabase **admin API** with `email_confirm: true` — accounts are created directly with **no confirmation email**, so nothing depends on Supabase's rate-limited shared email sender.
 
-See [lib/adminActions.ts](lib/adminActions.ts) and [lib/supabase/admin.ts](lib/supabase/admin.ts) for the details.
+- **Add a friend** from the **Friends** tab, **New group** → **Add someone new**, or a group's **member list** → **Add someone new to this group**. Any signed-in user can do this — there's no global admin.
+- Fill in their name, email, and a temp password — this creates their account and connects them to *you* immediately (and adds them to the group, if launched from one). The symmetric connection is between you and them only, which is what keeps circles separate.
+- Tell them their email + temp password out of band (text, in person). They sign in at `/login`, and can change their password anytime from **Account → Change password** and their display name from **Account** (tap the name).
+
+**Note:** because creating an account doesn't verify email, and any signed-in user can create accounts, this is designed for private friends-and-family instances rather than a public product. Emails are globally unique across the whole instance, so the same person can't be created independently in two different circles.
+
+See [lib/accountActions.ts](lib/accountActions.ts) and [lib/supabase/admin.ts](lib/supabase/admin.ts) for the details.
 
 ## Install as an app
 
@@ -70,4 +74,18 @@ On your phone, open the deployed site and use your browser's **Share → Add to 
 
 ## Deploying
 
-Deploy target is [Vercel](https://vercel.com/new). Set all four environment variables from `.env.local` in your Vercel project settings (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_ADMIN_EMAIL`) and redeploy.
+Deploy target is [Vercel](https://vercel.com/new). Set all three environment variables from `.env.local` in your Vercel project settings (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`) and redeploy.
+
+## Roadmap
+
+### Family / couple grouping (planned)
+
+Today every split is **per person**. The next feature adds an optional **household** layer *within a group* — a named unit of members who share one wallet (e.g. *The Sharmas* = {Dad, Mom}). It's aimed at trips where the natural unit is a couple or family rather than an individual.
+
+Planned behaviour:
+
+- **Split per household** — a bill divides once per unit instead of per head (a $300 dinner among 3 families = $100 each, not ÷ 6 people). Splitting per person stays available; per-household is just another mode.
+- **Balances net per household** — a couple settles as one; you never see internal "Dad owes Mom" noise.
+- **Scoped to the group** — a unit is defined inside a single group, *not* a permanent link between accounts. The same person can be solo in one group and part of a couple in another.
+
+Design intent (so it stays additive): keep `expense_splits` **per person** in the database, and layer households as (a) a small grouping entity within a group, (b) a per-household split mode, and (c) household-aware aggregation in the [Balances](#balances) view. The existing split engine ([lib/split.ts](lib/split.ts)) already operates on participant sets and amounts, so it can be reused as-is. This is independent of the accounts/isolation model above.
