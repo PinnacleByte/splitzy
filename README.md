@@ -1,6 +1,6 @@
 # Splitzy
 
-A friendly Splitwise-style bill-splitter, built as an installable PWA for a small group of real friends — flexible splitting (single or mixed bills, shares, itemized, per-night hotel stays, with diet/drinker/smoker-aware auto-selection), auto-balanced or detailed settle-ups, per-member spend stats, self-serve accounts with per-user isolated friend circles, and multi-device sync backed by Supabase.
+A friendly Splitwise-style bill-splitter, built as an installable PWA for a small group of real friends — flexible splitting (single or mixed bills, shares, itemized, per-night hotel stays, with diet/drinker/smoker-aware auto-selection), households that settle couples/families as one wallet, a family-trip mode with headcount-only members who need no login of their own, auto-balanced or detailed settle-ups with editable/partial payments, per-member spend stats, self-serve accounts with per-user isolated friend circles, and multi-device sync backed by Supabase.
 
 ## Stack
 
