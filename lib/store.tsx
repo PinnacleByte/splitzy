@@ -44,6 +44,40 @@ function unwrap({ error }: { error: { message: string } | null }): void {
   if (error) throw new Error(error.message);
 }
 
+/**
+ * Whether an error is a transient network failure (dropped/interrupted
+ * connection — common on mobile: weak signal, the tab backgrounded mid-request,
+ * a WiFi↔cellular handoff) rather than a genuine application error (RLS
+ * violation, bad input, conflict). postgrest-js catches a failed `fetch()` and
+ * *resolves* with `error: { message: "<Name>: <reason>" }` instead of
+ * rejecting — every browser's fetch() rejects network failures with a
+ * TypeError specifically (per the fetch spec, e.g. Safari's "Load failed",
+ * Chrome's "Failed to fetch"), so that name prefix reliably tells "the
+ * request never reached the server" apart from a real Postgrest error, whose
+ * messages read like SQL/RLS text and never start with an error-name prefix.
+ */
+function isRetryableNetworkError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.startsWith("TypeError:");
+}
+
+/**
+ * Retries a Supabase call a couple of times (short backoff) when it fails with
+ * a transient network error, instead of giving up on the first dropped
+ * connection. Application errors (RLS, validation, conflicts) are not
+ * network-shaped and fail immediately without wasted delay.
+ */
+async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
+  for (let i = 0; ; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (i >= attempts - 1 || !isRetryableNetworkError(err)) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 400 * 2 ** i));
+    }
+  }
+}
+
 type Store = {
   state: AppState;
   /** true once the initial auth check + data load has finished */
@@ -337,7 +371,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       };
       setState((s) => ({ ...s, groups: [group, ...s.groups] }));
 
-      (async () => {
+      withRetry(async () => {
         unwrap(await supabase.from("groups").insert({ id, name, emoji, created_by: state.meId }));
         unwrap(
           await supabase.from("group_members").insert({ group_id: id, person_id: state.meId }),
@@ -371,23 +405,35 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             ),
           );
         }
-      })().catch((err) => pushError("create the group", err));
+      }).catch((err) => {
+        setState((s) => ({ ...s, groups: s.groups.filter((g) => g.id !== id) }));
+        pushError("create the group", err);
+      });
 
       return group;
     };
 
     const updateGroup: Store["updateGroup"] = (groupId, patch) => {
       if (Object.keys(patch).length === 0) return;
+      const prior = state.groups.find((g) => g.id === groupId);
+      const revert: { name?: string; emoji?: string } = {};
+      if (prior && patch.name !== undefined) revert.name = prior.name;
+      if (prior && patch.emoji !== undefined) revert.emoji = prior.emoji;
+
       setState((s) => ({
         ...s,
         groups: s.groups.map((g) => (g.id === groupId ? { ...g, ...patch } : g)),
       }));
 
-      supabase
-        .from("groups")
-        .update(patch)
-        .eq("id", groupId)
-        .then(({ error }) => error && pushError("update the group", new Error(error.message)));
+      withRetry(async () => unwrap(await supabase.from("groups").update(patch).eq("id", groupId))).catch(
+        (err) => {
+          setState((s) => ({
+            ...s,
+            groups: s.groups.map((g) => (g.id === groupId ? { ...g, ...revert } : g)),
+          }));
+          pushError("update the group", err);
+        },
+      );
     };
 
     const addMemberToGroup: Store["addMemberToGroup"] = (groupId, personId, stayDates) => {
@@ -410,7 +456,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }),
       }));
 
-      (async () => {
+      withRetry(async () => {
         unwrap(
           await supabase.from("group_members").insert({ group_id: groupId, person_id: personId }),
         );
@@ -426,12 +472,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               ),
           );
         }
-      })().catch((err) => pushError("add them to the group", err));
+      }).catch((err) => {
+        setState((s) => ({
+          ...s,
+          groups: s.groups.map((g) => {
+            if (g.id !== groupId) return g;
+            const next: Group = { ...g, memberIds: g.memberIds.filter((m) => m !== personId) };
+            if (g.stay) {
+              next.stay = { ...g.stay, stays: g.stay.stays.filter((st) => st.personId !== personId) };
+            }
+            return next;
+          }),
+        }));
+        pushError("add them to the group", err);
+      });
     };
 
     const createHousehold: Store["createHousehold"] = (groupId, { name, emoji, memberIds }) => {
       const id = crypto.randomUUID();
       const household: Household = { id, name, emoji, memberIds };
+      const priorHouseholds = state.groups.find((g) => g.id === groupId)?.households ?? [];
 
       setState((s) => ({
         ...s,
@@ -446,7 +506,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }),
       }));
 
-      (async () => {
+      withRetry(async () => {
         unwrap(await supabase.from("households").insert({ id, group_id: groupId, name, emoji }));
         if (memberIds.length) {
           unwrap(
@@ -457,12 +517,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               .in("person_id", memberIds),
           );
         }
-      })().catch((err) => pushError("create the household", err));
+      }).catch((err) => {
+        setState((s) => ({
+          ...s,
+          groups: s.groups.map((g) => (g.id === groupId ? { ...g, households: priorHouseholds } : g)),
+        }));
+        pushError("create the household", err);
+      });
 
       return household;
     };
 
     const updateHousehold: Store["updateHousehold"] = (groupId, householdId, patch) => {
+      const prior = state.groups.find((g) => g.id === groupId)?.households?.find((h) => h.id === householdId);
+      const revert: { name?: string; emoji?: string } = {};
+      if (prior && patch.name !== undefined) revert.name = prior.name;
+      if (prior && patch.emoji !== undefined) revert.emoji = prior.emoji;
+
       setState((s) => ({
         ...s,
         groups: s.groups.map((g) =>
@@ -477,14 +548,31 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         ),
       }));
 
-      supabase
-        .from("households")
-        .update(patch)
-        .eq("id", householdId)
-        .then(({ error }) => error && pushError("rename the household", new Error(error.message)));
+      withRetry(async () =>
+        unwrap(await supabase.from("households").update(patch).eq("id", householdId)),
+      ).catch((err) => {
+        setState((s) => ({
+          ...s,
+          groups: s.groups.map((g) =>
+            g.id === groupId
+              ? {
+                  ...g,
+                  households: (g.households ?? []).map((h) =>
+                    h.id === householdId ? { ...h, ...revert } : h,
+                  ),
+                }
+              : g,
+          ),
+        }));
+        pushError("rename the household", err);
+      });
     };
 
     const setMemberHousehold: Store["setMemberHousehold"] = (groupId, personId, householdId) => {
+      const priorHouseholdId =
+        state.groups.find((g) => g.id === groupId)?.households?.find((h) => h.memberIds.includes(personId))
+          ?.id ?? null;
+
       setState((s) => ({
         ...s,
         groups: s.groups.map((g) => {
@@ -500,15 +588,36 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }),
       }));
 
-      supabase
-        .from("group_members")
-        .update({ household_id: householdId })
-        .eq("group_id", groupId)
-        .eq("person_id", personId)
-        .then(({ error }) => error && pushError("update the household", new Error(error.message)));
+      withRetry(async () =>
+        unwrap(
+          await supabase
+            .from("group_members")
+            .update({ household_id: householdId })
+            .eq("group_id", groupId)
+            .eq("person_id", personId),
+        ),
+      ).catch((err) => {
+        setState((s) => ({
+          ...s,
+          groups: s.groups.map((g) => {
+            if (g.id !== groupId) return g;
+            const households = (g.households ?? []).map((h) => ({
+              ...h,
+              memberIds:
+                h.id === priorHouseholdId
+                  ? Array.from(new Set([...h.memberIds, personId]))
+                  : h.memberIds.filter((m) => m !== personId),
+            }));
+            return { ...g, households };
+          }),
+        }));
+        pushError("update the household", err);
+      });
     };
 
     const deleteHousehold: Store["deleteHousehold"] = (groupId, householdId) => {
+      const prior = state.groups.find((g) => g.id === groupId)?.households?.find((h) => h.id === householdId);
+
       setState((s) => ({
         ...s,
         groups: s.groups.map((g) =>
@@ -519,14 +628,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }));
 
       // FK `on delete set null` resets the members' household_id automatically.
-      supabase
-        .from("households")
-        .delete()
-        .eq("id", householdId)
-        .then(({ error }) => error && pushError("disband the household", new Error(error.message)));
+      withRetry(async () => unwrap(await supabase.from("households").delete().eq("id", householdId))).catch(
+        (err) => {
+          if (prior) {
+            setState((s) => ({
+              ...s,
+              groups: s.groups.map((g) =>
+                g.id === groupId && !(g.households ?? []).some((h) => h.id === householdId)
+                  ? { ...g, households: [...(g.households ?? []), prior] }
+                  : g,
+              ),
+            }));
+          }
+          pushError("disband the household", err);
+        },
+      );
     };
 
     const removeMemberFromGroup: Store["removeMemberFromGroup"] = (groupId, personId) => {
+      const priorGroup = state.groups.find((g) => g.id === groupId);
+      const priorHouseholdId = priorGroup?.households?.find((h) => h.memberIds.includes(personId))?.id;
+      const priorStay = priorGroup?.stay?.stays.find((st) => st.personId === personId);
+
       setState((s) => ({
         ...s,
         groups: s.groups.map((g) => {
@@ -545,7 +668,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }),
       }));
 
-      (async () => {
+      withRetry(async () => {
         // stays has its own row per (group, person) — not cleaned up by any FK
         // when group_members is deleted, so it needs an explicit delete too.
         unwrap(
@@ -558,10 +681,37 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             .eq("group_id", groupId)
             .eq("person_id", personId),
         );
-      })().catch((err) => pushError("remove them from the group", err));
+      }).catch((err) => {
+        setState((s) => ({
+          ...s,
+          groups: s.groups.map((g) => {
+            if (g.id !== groupId || g.memberIds.includes(personId)) return g;
+            const next: Group = { ...g, memberIds: [...g.memberIds, personId] };
+            if (priorHouseholdId && g.households?.length) {
+              next.households = g.households.map((h) =>
+                h.id === priorHouseholdId ? { ...h, memberIds: [...h.memberIds, personId] } : h,
+              );
+            }
+            if (g.stay && priorStay) {
+              next.stay = { ...g.stay, stays: [...g.stay.stays, priorStay] };
+            }
+            return next;
+          }),
+        }));
+        pushError("remove them from the group", err);
+      });
     };
 
     const updateStay: Store["updateStay"] = (groupId, patch) => {
+      const priorStay = state.groups.find((g) => g.id === groupId)?.stay;
+      const revert: Partial<GroupStay> = {};
+      if (priorStay) {
+        if (patch.checkIn !== undefined) revert.checkIn = priorStay.checkIn;
+        if (patch.checkOut !== undefined) revert.checkOut = priorStay.checkOut;
+        if (patch.price !== undefined) revert.price = priorStay.price;
+        if (patch.paidBy !== undefined) revert.paidBy = priorStay.paidBy;
+      }
+
       setState((s) => ({
         ...s,
         groups: s.groups.map((g) =>
@@ -575,14 +725,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (patch.price !== undefined) dbPatch.price = patch.price;
       if (patch.paidBy !== undefined) dbPatch.paid_by = patch.paidBy;
 
-      supabase
-        .from("group_stays")
-        .update(dbPatch)
-        .eq("group_id", groupId)
-        .then(({ error }) => error && pushError("update the stay", new Error(error.message)));
+      withRetry(async () =>
+        unwrap(await supabase.from("group_stays").update(dbPatch).eq("group_id", groupId)),
+      ).catch((err) => {
+        setState((s) => ({
+          ...s,
+          groups: s.groups.map((g) =>
+            g.id === groupId && g.stay ? { ...g, stay: { ...g.stay, ...revert } } : g,
+          ),
+        }));
+        pushError("update the stay", err);
+      });
     };
 
     const setMemberStay: Store["setMemberStay"] = (groupId, personId, dates) => {
+      const priorGroup = state.groups.find((g) => g.id === groupId);
+      const priorEntry = priorGroup?.stay?.stays.find((st) => st.personId === personId);
+      const hadEntry = !!priorEntry;
+
       setState((s) => ({
         ...s,
         groups: s.groups.map((g) => {
@@ -595,13 +755,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }),
       }));
 
-      supabase
-        .from("stays")
-        .upsert(
-          { group_id: groupId, person_id: personId, from: dates.from, to: dates.to },
-          { onConflict: "group_id,person_id" },
-        )
-        .then(({ error }) => error && pushError("update their dates", new Error(error.message)));
+      withRetry(async () =>
+        unwrap(
+          await supabase
+            .from("stays")
+            .upsert(
+              { group_id: groupId, person_id: personId, from: dates.from, to: dates.to },
+              { onConflict: "group_id,person_id" },
+            ),
+        ),
+      ).catch((err) => {
+        setState((s) => ({
+          ...s,
+          groups: s.groups.map((g) => {
+            if (g.id !== groupId || !g.stay) return g;
+            const stays = hadEntry
+              ? g.stay.stays.map((st) => (st.personId === personId ? priorEntry! : st))
+              : g.stay.stays.filter((st) => st.personId !== personId);
+            return { ...g, stay: { ...g.stay, stays } };
+          }),
+        }));
+        pushError("update their dates", err);
+      });
     };
 
     const toggleTag: Store["toggleTag"] = (personId, tag) => {
@@ -615,31 +790,43 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         people: s.people.map((p) => (p.id === personId ? { ...p, tags: next } : p)),
       }));
 
-      supabase
-        .from("profiles")
-        .update({ tags: next })
-        .eq("id", personId)
-        .then(({ error }) => error && pushError("update that tag", new Error(error.message)));
+      withRetry(async () =>
+        unwrap(await supabase.from("profiles").update({ tags: next }).eq("id", personId)),
+      ).catch((err) => {
+        setState((s) => ({
+          ...s,
+          people: s.people.map((p) => (p.id === personId ? { ...p, tags: current } : p)),
+        }));
+        pushError("update that tag", err);
+      });
     };
 
     const updateMyProfile: Store["updateMyProfile"] = (patch) => {
+      const prior = person(state.meId);
+      const revert: { name?: string } = {};
+      if (patch.name !== undefined) revert.name = prior.name;
+
       setState((s) => ({
         ...s,
         people: s.people.map((p) => (p.id === s.meId ? { ...p, ...patch } : p)),
       }));
 
-      supabase
-        .from("profiles")
-        .update(patch)
-        .eq("id", state.meId)
-        .then(({ error }) => error && pushError("update your profile", new Error(error.message)));
+      withRetry(async () => unwrap(await supabase.from("profiles").update(patch).eq("id", state.meId))).catch(
+        (err) => {
+          setState((s) => ({
+            ...s,
+            people: s.people.map((p) => (p.id === state.meId ? { ...p, ...revert } : p)),
+          }));
+          pushError("update your profile", err);
+        },
+      );
     };
 
     const addExpense: Store["addExpense"] = (data) => {
       const e: Expense = { ...data, id: crypto.randomUUID(), createdAt: Date.now() };
       setState((s) => ({ ...s, expenses: [e, ...s.expenses] }));
 
-      (async () => {
+      withRetry(async () => {
         unwrap(
           await supabase.from("expenses").insert({
             id: e.id,
@@ -657,18 +844,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             e.splits.map((s) => ({ expense_id: e.id, person_id: s.personId, amount: s.amount })),
           ),
         );
-      })().catch((err) => pushError("save the expense", err));
+      }).catch((err) => {
+        // the save never landed — undo the optimistic add so the list doesn't
+        // keep showing an expense that only exists in this tab
+        setState((s) => ({ ...s, expenses: s.expenses.filter((x) => x.id !== e.id) }));
+        pushError("save the expense", err);
+      });
 
       return e;
     };
 
     const updateExpense: Store["updateExpense"] = (id, data) => {
+      const prior = state.expenses.find((e) => e.id === id);
+
       setState((s) => ({
         ...s,
         expenses: s.expenses.map((e) => (e.id === id ? { ...e, ...data } : e)),
       }));
 
-      (async () => {
+      withRetry(async () => {
         unwrap(
           await supabase
             .from("expenses")
@@ -689,57 +883,97 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             data.splits.map((s) => ({ expense_id: id, person_id: s.personId, amount: s.amount })),
           ),
         );
-      })().catch((err) => pushError("save the expense", err));
+      }).catch((err) => {
+        if (prior) setState((s) => ({ ...s, expenses: s.expenses.map((e) => (e.id === id ? prior : e)) }));
+        pushError("save the expense", err);
+      });
     };
 
     const addSettlement: Store["addSettlement"] = (data) => {
       const s0: Settlement = { ...data, id: crypto.randomUUID(), createdAt: Date.now() };
       setState((s) => ({ ...s, settlements: [s0, ...s.settlements] }));
 
-      supabase
-        .from("settlements")
-        .insert({
-          id: s0.id,
-          group_id: s0.groupId,
-          from_person: s0.from,
-          to_person: s0.to,
-          amount: s0.amount,
-        })
-        .then(({ error }) => error && pushError("record the settlement", new Error(error.message)));
+      withRetry(async () =>
+        unwrap(
+          await supabase.from("settlements").insert({
+            id: s0.id,
+            group_id: s0.groupId,
+            from_person: s0.from,
+            to_person: s0.to,
+            amount: s0.amount,
+          }),
+        ),
+      ).catch((err) => {
+        setState((s) => ({ ...s, settlements: s.settlements.filter((x) => x.id !== s0.id) }));
+        pushError("record the settlement", err);
+      });
 
       return s0;
     };
 
     const deleteExpense: Store["deleteExpense"] = (id) => {
+      const prior = state.expenses.find((e) => e.id === id);
       setState((s) => ({ ...s, expenses: s.expenses.filter((e) => e.id !== id) }));
-      supabase
-        .from("expenses")
-        .delete()
-        .eq("id", id)
-        .then(({ error }) => error && pushError("delete the expense", new Error(error.message)));
+
+      withRetry(async () => unwrap(await supabase.from("expenses").delete().eq("id", id))).catch((err) => {
+        if (prior) {
+          setState((s) => ({
+            ...s,
+            expenses: s.expenses.some((e) => e.id === id) ? s.expenses : [prior, ...s.expenses],
+          }));
+        }
+        pushError("delete the expense", err);
+      });
     };
 
     const deleteGroup: Store["deleteGroup"] = (id) => {
+      const priorGroup = state.groups.find((g) => g.id === id);
+      const priorExpenses = state.expenses.filter((e) => e.groupId === id);
+      const priorSettlements = state.settlements.filter((x) => x.groupId === id);
+
       setState((s) => ({
         ...s,
         groups: s.groups.filter((g) => g.id !== id),
         expenses: s.expenses.filter((e) => e.groupId !== id),
         settlements: s.settlements.filter((x) => x.groupId !== id),
       }));
-      supabase
-        .from("groups")
-        .delete()
-        .eq("id", id)
-        .then(({ error }) => error && pushError("delete the group", new Error(error.message)));
+
+      withRetry(async () => unwrap(await supabase.from("groups").delete().eq("id", id))).catch((err) => {
+        if (priorGroup) {
+          setState((s) => ({
+            ...s,
+            groups: s.groups.some((g) => g.id === id) ? s.groups : [priorGroup, ...s.groups],
+            expenses: [
+              ...s.expenses,
+              ...priorExpenses.filter((e) => !s.expenses.some((x) => x.id === e.id)),
+            ],
+            settlements: [
+              ...s.settlements,
+              ...priorSettlements.filter((x) => !s.settlements.some((y) => y.id === x.id)),
+            ],
+          }));
+        }
+        pushError("delete the group", err);
+      });
     };
 
     const deleteSettlement: Store["deleteSettlement"] = (id) => {
+      const prior = state.settlements.find((x) => x.id === id);
       setState((s) => ({ ...s, settlements: s.settlements.filter((x) => x.id !== id) }));
-      supabase
-        .from("settlements")
-        .delete()
-        .eq("id", id)
-        .then(({ error }) => error && pushError("undo the settlement", new Error(error.message)));
+
+      withRetry(async () => unwrap(await supabase.from("settlements").delete().eq("id", id))).catch(
+        (err) => {
+          if (prior) {
+            setState((s) => ({
+              ...s,
+              settlements: s.settlements.some((x) => x.id === id)
+                ? s.settlements
+                : [prior, ...s.settlements],
+            }));
+          }
+          pushError("undo the settlement", err);
+        },
+      );
     };
 
     return {
