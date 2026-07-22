@@ -21,12 +21,15 @@ import { ButtonLink } from "@/components/Button";
 import { AddFriendForm } from "@/components/AddFriendForm";
 import { Loading, NotFound } from "@/components/Screen";
 
+const GROUP_EMOJIS = ["🏖️", "🏨", "🏠", "✈️", "🎉", "⛰️", "🏀", "🎓", "💼", "🚗", "🍻", "🎁", "🧾"];
+
 export default function GroupPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { state, person, hydrated, deleteGroup } = useStore();
+  const { state, person, hydrated, deleteGroup, updateGroup } = useStore();
   const [tab, setTab] = useState<"expenses" | "balances">("expenses");
   const [menu, setMenu] = useState(false);
+  const [editingGroup, setEditingGroup] = useState(false);
 
   const group = state.groups.find((g) => g.id === id);
   if (!group) return hydrated ? <NotFound what="group" /> : <Loading />;
@@ -79,11 +82,20 @@ export default function GroupPage() {
             <>
               <div className="fixed inset-0 z-30" onClick={() => setMenu(false)} />
               <div className="animate-pop absolute right-0 top-12 z-40 w-48 overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl">
+                <button
+                  onClick={() => {
+                    setMenu(false);
+                    setEditingGroup(true);
+                  }}
+                  className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-bold hover:bg-surface-2"
+                >
+                  ✏️ Edit group
+                </button>
                 {group.stay && (
                   <Link
                     href={`/groups/${group.id}/stay`}
                     onClick={() => setMenu(false)}
-                    className="flex items-center gap-2 px-4 py-3 text-sm font-bold hover:bg-surface-2"
+                    className="flex items-center gap-2 border-t border-border px-4 py-3 text-sm font-bold hover:bg-surface-2"
                   >
                     🏨 Manage stay
                   </Link>
@@ -104,6 +116,17 @@ export default function GroupPage() {
       </header>
 
       <div className="flex flex-col gap-5 px-5 pt-5">
+        {editingGroup && (
+          <GroupEditor
+            group={group}
+            onSave={(patch) => {
+              updateGroup(group.id, patch);
+              setEditingGroup(false);
+            }}
+            onCancel={() => setEditingGroup(false)}
+          />
+        )}
+
         {/* Your balance */}
         <section
           className={`animate-pop rounded-4xl p-5 text-white shadow-[var(--shadow)] ${
@@ -128,7 +151,7 @@ export default function GroupPage() {
         {group.stay && <StayCard group={group} />}
 
         {/* Members */}
-        <MembersRow group={group} />
+        <MembersRow group={group} net={net} />
 
         {/* Households — group couples/families so they settle as one */}
         <HouseholdsSection group={group} />
@@ -177,6 +200,71 @@ export default function GroupPage() {
   );
 }
 
+function GroupEditor({
+  group,
+  onSave,
+  onCancel,
+}: {
+  group: Group;
+  onSave: (patch: { name?: string; emoji?: string }) => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(group.name);
+  const [emoji, setEmoji] = useState(group.emoji);
+
+  const commit = () => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const patch: { name?: string; emoji?: string } = {};
+    if (trimmed !== group.name) patch.name = trimmed;
+    if (emoji !== group.emoji) patch.emoji = emoji;
+    onSave(patch);
+  };
+
+  return (
+    <div className="animate-pop flex flex-col gap-3 rounded-3xl border border-border bg-surface p-4 shadow-sm">
+      <p className="text-sm font-bold text-muted">Edit group</p>
+      <div className="flex items-center gap-3">
+        <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-surface-2 text-2xl">
+          {emoji}
+        </span>
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && commit()}
+          className="min-w-0 flex-1 rounded-2xl bg-surface-2 px-4 py-2.5 text-base font-extrabold outline-none"
+        />
+      </div>
+      <div className="no-scrollbar flex gap-2 overflow-x-auto pb-1">
+        {GROUP_EMOJIS.map((em) => (
+          <button
+            key={em}
+            onClick={() => setEmoji(em)}
+            className={`grid h-10 w-10 shrink-0 place-items-center rounded-full text-lg transition-all ${
+              emoji === em ? "bg-primary-soft ring-2 ring-primary" : "bg-surface-2"
+            }`}
+          >
+            {em}
+          </button>
+        ))}
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={commit}
+          disabled={!name.trim()}
+          className="flex-1 rounded-full bg-primary py-2.5 text-sm font-bold text-white active:scale-95 disabled:opacity-40"
+        >
+          Save
+        </button>
+        <button onClick={onCancel} className="px-3 text-xs font-bold text-muted active:scale-95">
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function StayCard({ group }: { group: Group }) {
   const { state } = useStore();
   const stay = group.stay!;
@@ -211,12 +299,33 @@ function StayCard({ group }: { group: Group }) {
   );
 }
 
-function MembersRow({ group }: { group: Group }) {
-  const { state, person, addMemberToGroup } = useStore();
-  const [adding, setAdding] = useState(false);
+function MembersRow({ group, net }: { group: Group; net: Record<string, number> }) {
+  const { state, person, addMemberToGroup, removeMemberFromGroup } = useStore();
+  const router = useRouter();
+  const [expanded, setExpanded] = useState(false);
   const available = state.people.filter((p) => !group.memberIds.includes(p.id));
 
-  // Staying groups add members (with dates) on the dedicated stay screen.
+  const removeMember = (pid: string) => {
+    if (group.memberIds.length <= 1) {
+      alert("A group needs at least one member — delete the group instead.");
+      return;
+    }
+    if (Math.abs(net[pid] ?? 0) >= 0.005) {
+      alert(
+        `${pid === state.meId ? "You" : person(pid).name} still ${
+          (net[pid] ?? 0) > 0 ? "are owed money" : "owe money"
+        } in this group. Settle up first.`,
+      );
+      return;
+    }
+    const label = pid === state.meId ? "leave this group" : `remove ${person(pid).name}`;
+    if (!confirm(`Are you sure you want to ${label}?`)) return;
+    removeMemberFromGroup(group.id, pid);
+    if (pid === state.meId) router.push("/");
+  };
+
+  // Staying groups add members (with dates) on the dedicated stay screen;
+  // removal there happens on that same screen (per-member nights live there).
   if (group.stay) {
     return (
       <div className="flex items-center gap-3 rounded-3xl border border-border bg-surface p-3.5 shadow-sm">
@@ -239,14 +348,32 @@ function MembersRow({ group }: { group: Group }) {
           {group.memberIds.length} members
         </span>
         <button
-          onClick={() => setAdding((v) => !v)}
+          onClick={() => setExpanded((v) => !v)}
           className="rounded-full bg-primary-soft px-3 py-1.5 text-xs font-bold text-primary active:scale-95"
         >
-          + Add member
+          {expanded ? "Done" : "Manage"}
         </button>
       </div>
-      {adding && (
-        <div className="flex flex-col gap-2 border-t border-border pt-2">
+      {expanded && (
+        <div className="flex flex-col gap-3 border-t border-border pt-3">
+          <div className="flex flex-wrap gap-2">
+            {group.memberIds.map((pid) => (
+              <span
+                key={pid}
+                className="flex items-center gap-1.5 rounded-full bg-surface-2 py-1 pl-1 pr-2 text-sm font-bold"
+              >
+                <Avatar person={person(pid)} size="sm" />
+                {pid === state.meId ? "You" : person(pid).name}
+                <button
+                  onClick={() => removeMember(pid)}
+                  aria-label={pid === state.meId ? "Leave group" : "Remove member"}
+                  className="grid h-5 w-5 place-items-center rounded-full text-muted hover:bg-negative-soft hover:text-negative"
+                >
+                  ✕
+                </button>
+              </span>
+            ))}
+          </div>
           {available.length > 0 && (
             <div className="flex flex-wrap gap-2">
               {available.map((p) => (

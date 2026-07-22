@@ -54,6 +54,13 @@ Each group's **Balances** tab offers two views (toggle at the top):
 
 **Group stats** below the balances show what each member **paid** (fronted) versus their **share** (consumed), and badge the biggest individual payer. The math lives in [lib/balances.ts](lib/balances.ts).
 
+From **Settle up**, each suggested payment's amount is editable before you confirm — record a partial payment and the remaining balance carries forward automatically. Made a mistake? Every settlement shows up in **Activity** with an undo (trash) button.
+
+### Managing a group
+
+- **Rename / re-emoji** — the **⋮** menu on a group page → **Edit group**.
+- **Remove a member (or leave yourself)** — the members row → **Manage** → tap the ✕ on anyone's chip (stay groups manage this from **Manage stay** instead, alongside their nights). Blocked with a message if that person still has a non-zero balance in the group — settle up first. A group always needs at least one member; delete the group instead of removing the last one.
+
 ### Households (couples & families)
 
 A group can organise its members into **households** — a named couple or family who settle as **one wallet** (e.g. *The Sharmas* = {Dad, Mom}). Manage them from a group's **Households** panel: create a household, give it a name + emoji, and tap member chips to add or remove people. Anyone not in a household is a **single**.

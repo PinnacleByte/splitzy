@@ -7,11 +7,11 @@ import { Avatar } from "@/components/Avatar";
 
 type Item =
   | { kind: "expense"; ts: number; groupId: string; emoji: string; title: string; sub: string; amount: number }
-  | { kind: "settle"; ts: number; groupId: string; from: string; to: string; amount: number }
+  | { kind: "settle"; id: string; ts: number; groupId: string; from: string; to: string; amount: number }
   | { kind: "stay"; ts: number; groupId: string; sub: string; amount: number };
 
 export default function ActivityPage() {
-  const { state, person } = useStore();
+  const { state, person, deleteSettlement } = useStore();
   const groupName = (id: string) =>
     state.groups.find((g) => g.id === id)?.name ?? "";
 
@@ -27,6 +27,7 @@ export default function ActivityPage() {
     })),
     ...state.settlements.map((s) => ({
       kind: "settle" as const,
+      id: s.id,
       ts: s.createdAt,
       groupId: s.groupId,
       from: s.from,
@@ -56,11 +57,11 @@ export default function ActivityPage() {
       ) : (
         <ul className="flex flex-col gap-3">
           {items.map((it, i) => (
-            <li key={i}>
-              <Link
-                href={`/groups/${it.groupId}`}
-                className="flex items-center gap-3 rounded-3xl border border-border bg-surface p-4 shadow-sm transition-transform hover:-translate-y-0.5"
-              >
+            <li
+              key={i}
+              className="group flex items-center gap-1 rounded-3xl border border-border bg-surface p-4 shadow-sm transition-transform hover:-translate-y-0.5"
+            >
+              <Link href={`/groups/${it.groupId}`} className="flex min-w-0 flex-1 items-center gap-3">
                 {it.kind === "expense" && (
                   <>
                     <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-surface-2 text-xl">
@@ -111,10 +112,29 @@ export default function ActivityPage() {
                   </>
                 )}
               </Link>
+              {it.kind === "settle" && (
+                <button
+                  onClick={() => {
+                    if (confirm(`Undo this payment of ${money(it.amount)}?`)) deleteSettlement(it.id);
+                  }}
+                  aria-label="Undo settlement"
+                  className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-muted opacity-0 transition-opacity hover:bg-negative-soft hover:text-negative group-hover:opacity-100"
+                >
+                  <TrashIcon />
+                </button>
+              )}
             </li>
           ))}
         </ul>
       )}
     </main>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    </svg>
   );
 }

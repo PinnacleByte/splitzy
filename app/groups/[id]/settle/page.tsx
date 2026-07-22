@@ -17,6 +17,9 @@ export default function SettlePage() {
 
   const group = state.groups.find((g) => g.id === id);
   const [byHousehold, setByHousehold] = useState(true);
+  // per-row override of the suggested settle amount, keyed by transfer index —
+  // lets a partial payment be recorded instead of the full suggested amount
+  const [customAmounts, setCustomAmounts] = useState<Record<number, string>>({});
   if (!hydrated) return <Loading />;
   if (!group) return <NotFound what="group" />;
 
@@ -95,32 +98,50 @@ export default function SettlePage() {
           </div>
         ) : (
           <ul className="flex flex-col gap-3">
-            {transfers.map((t, i) => (
-              <li
-                key={i}
-                className="flex flex-col gap-3 rounded-3xl border border-border bg-surface p-4 shadow-sm"
-              >
-                <div className="flex items-center gap-3">
-                  <UnitFace id={t.from} households={households} person={person} />
-                  <div className="flex flex-1 flex-col">
-                    <span className="text-sm font-bold">
-                      <b>{unitName(t.from)}</b> pays <b>{unitName(t.to)}</b>
-                    </span>
-                    <span className="text-xs font-semibold text-muted">
-                      settles {money(t.amount)}
-                    </span>
-                  </div>
-                  <UnitFace id={t.to} households={households} person={person} />
-                </div>
-                <Button
-                  onClick={() => record(t.from, t.to, t.amount)}
-                  variant="positive"
-                  fullWidth
+            {transfers.map((t, i) => {
+              const text = customAmounts[i] ?? String(t.amount);
+              const parsed = Math.round((parseFloat(text) || 0) * 100) / 100;
+              return (
+                <li
+                  key={i}
+                  className="flex flex-col gap-3 rounded-3xl border border-border bg-surface p-4 shadow-sm"
                 >
-                  Mark {money(t.amount)} as paid
-                </Button>
-              </li>
-            ))}
+                  <div className="flex items-center gap-3">
+                    <UnitFace id={t.from} households={households} person={person} />
+                    <div className="flex flex-1 flex-col">
+                      <span className="text-sm font-bold">
+                        <b>{unitName(t.from)}</b> pays <b>{unitName(t.to)}</b>
+                      </span>
+                      <span className="text-xs font-semibold text-muted">
+                        owes up to {money(t.amount)}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1 rounded-full bg-surface-2 px-3 py-1.5">
+                      <span className="text-sm font-black text-muted">$</span>
+                      <input
+                        inputMode="decimal"
+                        value={text}
+                        onChange={(e) =>
+                          setCustomAmounts((prev) => ({
+                            ...prev,
+                            [i]: e.target.value.replace(/[^0-9.]/g, ""),
+                          }))
+                        }
+                        className="w-20 bg-transparent text-right text-sm font-black outline-none"
+                      />
+                    </div>
+                  </div>
+                  <Button
+                    onClick={() => record(t.from, t.to, parsed)}
+                    disabled={parsed <= 0}
+                    variant="positive"
+                    fullWidth
+                  >
+                    Mark {money(parsed)} as paid
+                  </Button>
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>

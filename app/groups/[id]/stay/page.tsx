@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useStore } from "@/lib/store";
+import { groupNet } from "@/lib/balances";
 import { computeNights, nightsBetween } from "@/lib/split";
 import { money } from "@/lib/format";
 import type { Group } from "@/lib/types";
@@ -33,7 +34,8 @@ export default function StayPage() {
 
 function StayEditor({ group }: { group: Group }) {
   const router = useRouter();
-  const { state, person, updateStay, setMemberStay, addMemberToGroup } = useStore();
+  const { state, person, updateStay, setMemberStay, addMemberToGroup, removeMemberFromGroup } =
+    useStore();
   const stay = group.stay!;
   const [priceText, setPriceText] = useState(stay.price ? String(stay.price) : "");
   const [adding, setAdding] = useState(false);
@@ -50,6 +52,10 @@ function StayEditor({ group }: { group: Group }) {
 
   const available = state.people.filter((p) => !group.memberIds.includes(p.id));
 
+  const expenses = state.expenses.filter((e) => e.groupId === group.id);
+  const settlements = state.settlements.filter((s) => s.groupId === group.id);
+  const net = groupNet(group, expenses, settlements);
+
   const commitPrice = (v: string) => {
     setPriceText(v);
     updateStay(group.id, { price: parseFloat(v) || 0 });
@@ -57,6 +63,24 @@ function StayEditor({ group }: { group: Group }) {
   const addExisting = (pid: string) => {
     addMemberToGroup(group.id, pid, { from: stay.checkIn, to: stay.checkOut });
     setAdding(false);
+  };
+  const removeMember = (pid: string) => {
+    if (group.memberIds.length <= 1) {
+      alert("A group needs at least one member — delete the group instead.");
+      return;
+    }
+    if (Math.abs(net[pid] ?? 0) >= 0.005) {
+      alert(
+        `${pid === state.meId ? "You" : person(pid).name} still ${
+          (net[pid] ?? 0) > 0 ? "are owed money" : "owe money"
+        } in this group. Settle up first.`,
+      );
+      return;
+    }
+    const label = pid === state.meId ? "leave this group" : `remove ${person(pid).name}`;
+    if (!confirm(`Are you sure you want to ${label}?`)) return;
+    removeMemberFromGroup(group.id, pid);
+    if (pid === state.meId) router.push("/");
   };
 
   return (
@@ -180,6 +204,13 @@ function StayEditor({ group }: { group: Group }) {
                     <span className="flex-1 font-bold">{pid === state.meId ? "You" : p.name}</span>
                     <span className="text-xs font-bold text-muted">{n}n</span>
                     <span className="font-black text-primary">{money(shareOf(pid))}</span>
+                    <button
+                      onClick={() => removeMember(pid)}
+                      aria-label={pid === state.meId ? "Leave group" : "Remove member"}
+                      className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-muted hover:bg-negative-soft hover:text-negative"
+                    >
+                      ✕
+                    </button>
                   </div>
                   <div className="mt-2 flex items-center gap-2 pl-11">
                     <DateField

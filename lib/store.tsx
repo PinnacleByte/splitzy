@@ -66,6 +66,8 @@ type Store = {
     memberIds: string[];
     stay?: GroupStay;
   }) => Group;
+  /** rename / re-emoji a group */
+  updateGroup: (groupId: string, patch: { name?: string; emoji?: string }) => void;
   toggleTag: (personId: string, tag: string) => void;
   /** edit your own display name */
   updateMyProfile: (patch: { name?: string }) => void;
@@ -94,6 +96,8 @@ type Store = {
   ) => void;
   /** disband a household — its members become singles again */
   deleteHousehold: (groupId: string, householdId: string) => void;
+  /** remove a member from a group (also works to leave a group yourself) */
+  removeMemberFromGroup: (groupId: string, personId: string) => void;
   updateStay: (groupId: string, patch: Partial<GroupStay>) => void;
   setMemberStay: (
     groupId: string,
@@ -105,6 +109,7 @@ type Store = {
   addSettlement: (data: Omit<Settlement, "id" | "createdAt">) => Settlement;
   deleteExpense: (id: string) => void;
   deleteGroup: (id: string) => void;
+  deleteSettlement: (id: string) => void;
 };
 
 const StoreContext = createContext<Store | null>(null);
@@ -371,6 +376,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return group;
     };
 
+    const updateGroup: Store["updateGroup"] = (groupId, patch) => {
+      if (Object.keys(patch).length === 0) return;
+      setState((s) => ({
+        ...s,
+        groups: s.groups.map((g) => (g.id === groupId ? { ...g, ...patch } : g)),
+      }));
+
+      supabase
+        .from("groups")
+        .update(patch)
+        .eq("id", groupId)
+        .then(({ error }) => error && pushError("update the group", new Error(error.message)));
+    };
+
     const addMemberToGroup: Store["addMemberToGroup"] = (groupId, personId, stayDates) => {
       setState((s) => ({
         ...s,
@@ -505,6 +524,41 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         .delete()
         .eq("id", householdId)
         .then(({ error }) => error && pushError("disband the household", new Error(error.message)));
+    };
+
+    const removeMemberFromGroup: Store["removeMemberFromGroup"] = (groupId, personId) => {
+      setState((s) => ({
+        ...s,
+        groups: s.groups.map((g) => {
+          if (g.id !== groupId) return g;
+          const next: Group = { ...g, memberIds: g.memberIds.filter((m) => m !== personId) };
+          if (g.households?.length) {
+            next.households = g.households.map((h) => ({
+              ...h,
+              memberIds: h.memberIds.filter((m) => m !== personId),
+            }));
+          }
+          if (g.stay) {
+            next.stay = { ...g.stay, stays: g.stay.stays.filter((st) => st.personId !== personId) };
+          }
+          return next;
+        }),
+      }));
+
+      (async () => {
+        // stays has its own row per (group, person) — not cleaned up by any FK
+        // when group_members is deleted, so it needs an explicit delete too.
+        unwrap(
+          await supabase.from("stays").delete().eq("group_id", groupId).eq("person_id", personId),
+        );
+        unwrap(
+          await supabase
+            .from("group_members")
+            .delete()
+            .eq("group_id", groupId)
+            .eq("person_id", personId),
+        );
+      })().catch((err) => pushError("remove them from the group", err));
     };
 
     const updateStay: Store["updateStay"] = (groupId, patch) => {
@@ -679,6 +733,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         .then(({ error }) => error && pushError("delete the group", new Error(error.message)));
     };
 
+    const deleteSettlement: Store["deleteSettlement"] = (id) => {
+      setState((s) => ({ ...s, settlements: s.settlements.filter((x) => x.id !== id) }));
+      supabase
+        .from("settlements")
+        .delete()
+        .eq("id", id)
+        .then(({ error }) => error && pushError("undo the settlement", new Error(error.message)));
+    };
+
     return {
       state,
       hydrated,
@@ -688,6 +751,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       signUp,
       signOut,
       addGroup,
+      updateGroup,
       toggleTag,
       updateMyProfile,
       addMemberToGroup,
@@ -695,6 +759,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       updateHousehold,
       setMemberHousehold,
       deleteHousehold,
+      removeMemberFromGroup,
       updateStay,
       setMemberStay,
       addExpense,
@@ -702,6 +767,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       addSettlement,
       deleteExpense,
       deleteGroup,
+      deleteSettlement,
     };
   }, [state, hydrated, supabase, load, pushError]);
 
