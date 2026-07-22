@@ -70,6 +70,14 @@ A group can organise its members into **households** — a named couple or famil
 - **Scoped to the group** — a household lives inside one group only; it is *not* a permanent link between accounts, so the same person can be solo in one group and part of a couple in another.
 - **Additive** — `expense_splits` stay strictly **per person** in the database; households are just a grouping entity (`households` table + `group_members.household_id`) plus household-aware aggregation in [lib/balances.ts](lib/balances.ts) and a per-household equal-split mode (`computeEqualPerHousehold` in [lib/split.ts](lib/split.ts)).
 
+### Family trips (headcount-only members)
+
+**New group** → **Trip style** → **Family trip** builds a group out of families instead of individuals: for each family, pick one **lead** (a real, logged-in account — an existing friend, yourself, or someone new via **Add someone new**) and add any number of **family members by name only** — no email or password. Each family becomes a [household](#households-couples--families) automatically, ready to settle as one wallet from the moment the group is created.
+
+- **No login for family members** — a "placeholder" person is a bare-bones `profiles` row (name + avatar) with no `auth.users` account behind it and no diet/drinker/smoker tags — they can never sign in, and they're always included at full share like anyone with no tags set. Their lead (or whoever created them) manages everything on their behalf.
+- **Reusable across trips** — once created, a family member shows up as an ordinary entry in your **Friends** list (auto-connected to whoever created them) and can be picked again for a future family trip instead of retyping their name. The Friends page shows a plain, non-editable view for them (no tag buttons) since there's no profile to auto-split by.
+- **Deferred creation** — typing a family member's name doesn't create anything yet; they're only written to the database once you confirm the family step (so backing out of the wizard part-way never leaves orphaned placeholder people behind), which also means a family trip can still go on to be a "staying together" hotel-stay group — booking price, dates, and per-member nights all work the same for family members as for anyone else, since by that point they already have a real id.
+
 ## Accounts, friends, and isolated circles
 
 Anyone can **create their own account** from `/login` → **Create account** (name + email + password). This starts a fresh, empty space — your own "circle" of friends and groups. Different circles never see each other: Row Level Security scopes every table to your friend connections and group memberships ([supabase/schema.sql](supabase/schema.sql)), so your dad running his own trip can't see your data and vice-versa.

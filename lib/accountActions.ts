@@ -73,3 +73,65 @@ export async function addFriendAccount(data: {
 
   return { error: null };
 }
+
+// mirrors handle_new_user()'s palette (supabase/schema.sql) for visual consistency
+const PLACEHOLDER_PALETTE = [
+  "from-sky-400 to-cyan-400",
+  "from-amber-400 to-orange-400",
+  "from-rose-400 to-pink-400",
+  "from-emerald-400 to-teal-400",
+  "from-indigo-400 to-violet-400",
+  "from-fuchsia-400 to-pink-500",
+];
+
+/**
+ * Create a "placeholder" person — a family member with no login of their own
+ * (e.g. the rest of a family trip's household, whose one "lead" account
+ * manages them). No email/password: this writes a bare profiles row with no
+ * corresponding auth.users row (is_placeholder = true, owner_id = you), which
+ * is why it needs the admin/service-role client the same way signUpAccount
+ * and addFriendAccount do. Also connects you to them symmetrically, same as
+ * addFriendAccount, so they show up as an ordinary entry in your Friends list
+ * and can be reused across future trips instead of re-typing their name.
+ */
+export async function createPlaceholderPerson(data: {
+  name: string;
+  groupId?: string;
+}): Promise<{ id: string | null; error: string | null }> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { id: null, error: "You must be signed in to add a family member." };
+  }
+
+  const admin = createAdminClient();
+  const id = crypto.randomUUID();
+  const color = PLACEHOLDER_PALETTE[Math.floor(Math.random() * PLACEHOLDER_PALETTE.length)];
+
+  const { error: profileError } = await admin.from("profiles").insert({
+    id,
+    name: data.name,
+    color,
+    is_placeholder: true,
+    owner_id: user.id,
+  });
+  if (profileError) return { id: null, error: profileError.message };
+
+  const { error: connError } = await admin.from("connections").insert([
+    { user_id: user.id, friend_id: id },
+    { user_id: id, friend_id: user.id },
+  ]);
+  if (connError) return { id: null, error: connError.message };
+
+  if (data.groupId) {
+    const { error: memberError } = await admin
+      .from("group_members")
+      .insert({ group_id: data.groupId, person_id: id });
+    if (memberError) return { id: null, error: memberError.message };
+  }
+
+  return { id, error: null };
+}

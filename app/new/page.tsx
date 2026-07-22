@@ -3,19 +3,44 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useStore } from "@/lib/store";
+import { createPlaceholderPerson } from "@/lib/accountActions";
 import { computeNights, nightsBetween } from "@/lib/split";
 import { money } from "@/lib/format";
+import type { Person } from "@/lib/types";
 import { Avatar } from "@/components/Avatar";
 import { Button } from "@/components/Button";
 import { AddFriendForm } from "@/components/AddFriendForm";
 import { DateField, PriceInput } from "@/components/inputs";
 
 const GROUP_EMOJIS = ["🏖️", "🏨", "🏠", "✈️", "🎉", "⛰️", "🏀", "🎓", "💼", "🚗", "🍻", "🎁"];
+const FAMILY_EMOJIS = ["💑", "👪", "🧑‍🤝‍🧑", "👨‍👩‍👧", "👩‍👧", "🏠", "❤️", "🐣"];
 
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 const plusDays = (s: string, n: number) =>
   iso(new Date(Date.parse(`${s}T00:00:00Z`) + n * 86_400_000));
 const TODAY = iso(new Date());
+
+/** a family being drafted in the wizard — persisted (via addGroup's
+ *  households param) only when the whole group is created */
+type FamilyDraft = {
+  key: string;
+  name: string;
+  emoji: string;
+  /** a real account — either an existing connection or a freshly added one */
+  leadId: string | null;
+  /** headcount-only members with no login; `id` is null until the family
+   *  step is confirmed, at which point any not yet backed by a real
+   *  (reused) placeholder get created */
+  placeholders: { key: string; name: string; id: string | null }[];
+};
+
+const newFamily = (index: number): FamilyDraft => ({
+  key: crypto.randomUUID(),
+  name: `Family ${index + 1}`,
+  emoji: FAMILY_EMOJIS[index % FAMILY_EMOJIS.length],
+  leadId: null,
+  placeholders: [],
+});
 
 export default function NewGroupWizard() {
   const router = useRouter();
@@ -24,7 +49,11 @@ export default function NewGroupWizard() {
   const [step, setStep] = useState(1);
   const [name, setName] = useState("");
   const [emoji, setEmoji] = useState("🎉");
+  const [composition, setComposition] = useState<"singles" | "family" | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
+  const [families, setFamilies] = useState<FamilyDraft[]>([newFamily(0)]);
+  const [finalizing, setFinalizing] = useState(false);
+  const [finalizeError, setFinalizeError] = useState<string | null>(null);
   const [isStay, setIsStay] = useState<boolean | null>(null);
   const [checkIn, setCheckIn] = useState(TODAY);
   const [checkOut, setCheckOut] = useState(plusDays(TODAY, 7));
@@ -32,17 +61,31 @@ export default function NewGroupWizard() {
   const [paidBy, setPaidBy] = useState(state.meId);
   const [ranges, setRanges] = useState<Record<string, { from: string; to: string }>>({});
 
-  const memberIds = useMemo(() => [state.meId, ...selected], [state.meId, selected]);
+  const isFamily = composition === "family";
+  const familyMemberIds = useMemo(
+    () => [
+      ...families.map((f) => f.leadId).filter((x): x is string => !!x),
+      ...families.flatMap((f) => f.placeholders.map((p) => p.id).filter((x): x is string => !!x)),
+    ],
+    [families],
+  );
+  const memberIds = useMemo(
+    () => [state.meId, ...(isFamily ? familyMemberIds : selected)],
+    [state.meId, isFamily, familyMemberIds, selected],
+  );
   const others = state.people.filter((p) => p.id !== state.meId);
+  const availableLeads = others.filter((p) => !p.isPlaceholder);
+  const availablePlaceholders = others.filter((p) => p.isPlaceholder);
   const priceNum = parseFloat(price) || 0;
-  const maxStep = isStay ? 5 : 3;
+  const maxStep = isStay ? 6 : 4;
 
   const rangeFor = (pid: string) => ranges[pid] ?? { from: checkIn, to: checkOut };
   const stays = memberIds.map((pid) => ({ personId: pid, ...rangeFor(pid) }));
+  const staysKey = JSON.stringify(stays);
   const preview = useMemo(
     () => computeNights(priceNum, checkIn, checkOut, stays),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [priceNum, checkIn, checkOut, JSON.stringify(stays)],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- staysKey stands in for stays' content
+    [priceNum, checkIn, checkOut, staysKey],
   );
   const shareOf = (pid: string) =>
     preview.find((s) => s.personId === pid)?.amount ?? 0;
@@ -52,14 +95,22 @@ export default function NewGroupWizard() {
       prev.includes(pid) ? prev.filter((x) => x !== pid) : [...prev, pid],
     );
 
+  const familiesValid = families.length > 0 && families.every((f) => f.name.trim() && f.leadId);
+
   const stepValid =
     step === 1
       ? name.trim().length > 0
-      : step === 3
-        ? isStay !== null
-        : step === 4
-          ? priceNum > 0 && nightsBetween(checkIn, checkOut) > 0
-          : true;
+      : step === 2
+        ? composition !== null
+        : step === 3
+          ? isFamily
+            ? familiesValid
+            : true
+          : step === 4
+            ? isStay !== null
+            : step === 5
+              ? priceNum > 0 && nightsBetween(checkIn, checkOut) > 0
+              : true;
 
   const create = () => {
     const stay = isStay
@@ -71,18 +122,75 @@ export default function NewGroupWizard() {
           stays: memberIds.map((pid) => ({ personId: pid, ...rangeFor(pid) })),
         }
       : undefined;
-    const g = addGroup({ name: name.trim(), emoji, memberIds: selected, stay });
+    const households = isFamily
+      ? families.map((f) => ({
+          name: f.name.trim(),
+          emoji: f.emoji,
+          memberIds: [
+            f.leadId!,
+            ...f.placeholders.map((p) => p.id).filter((x): x is string => !!x),
+          ],
+        }))
+      : undefined;
+    const g = addGroup({
+      name: name.trim(),
+      emoji,
+      memberIds: isFamily ? familyMemberIds : selected,
+      stay,
+      households,
+    });
     router.push(`/groups/${g.id}`);
   };
 
+  /** the family step names any brand-new headcount members but doesn't create
+   *  them until you confirm — so cancelling the wizard doesn't leave orphaned
+   *  placeholder profiles behind. This creates any that don't already have a
+   *  real id (a reused, previously-created family member already does). */
+  const finalizeFamilies = async () => {
+    setFinalizing(true);
+    setFinalizeError(null);
+    try {
+      const resolved = await Promise.all(
+        families.map(async (f) => ({
+          ...f,
+          placeholders: await Promise.all(
+            f.placeholders.map(async (p) => {
+              if (p.id) return p;
+              const { id, error } = await createPlaceholderPerson({ name: p.name });
+              if (error || !id) throw new Error(error ?? "Something went wrong.");
+              return { ...p, id };
+            }),
+          ),
+        })),
+      );
+      setFamilies(resolved);
+      setStep(step + 1);
+    } catch (err) {
+      setFinalizeError(err instanceof Error ? err.message : "Couldn't add a family member.");
+    } finally {
+      setFinalizing(false);
+    }
+  };
+
   const next = () => {
-    if (!stepValid) return;
+    if (!stepValid || finalizing) return;
+    if (isFamily && step === 3) {
+      finalizeFamilies();
+      return;
+    }
     if (step >= maxStep) create();
     else setStep(step + 1);
   };
   const back = () => (step > 1 ? setStep(step - 1) : router.back());
 
-  const STEP_TITLES = ["Name your group", "Add people", "Trip type", "Booking details", "Who stayed when"];
+  const STEP_TITLES = [
+    "Name your group",
+    "Trip style",
+    isFamily ? "Build your families" : "Add people",
+    "Trip type",
+    "Booking details",
+    "Who stayed when",
+  ];
 
   return (
     <main className="flex flex-1 flex-col">
@@ -135,8 +243,31 @@ export default function NewGroupWizard() {
           </div>
         )}
 
-        {/* STEP 2 — members */}
+        {/* STEP 2 — singles or family trip */}
         {step === 2 && (
+          <section className="flex flex-col gap-3">
+            <p className="px-1 text-sm font-bold text-muted">
+              Is this a group of individuals, or a few families/couples traveling together?
+            </p>
+            <TypeCard
+              active={composition === "singles"}
+              onClick={() => setComposition("singles")}
+              emoji="🧑‍🤝‍🧑"
+              title="Singles trip"
+              desc="Pick people one at a time, same as any group."
+            />
+            <TypeCard
+              active={composition === "family"}
+              onClick={() => setComposition("family")}
+              emoji="👪"
+              title="Family trip"
+              desc="Group people into families — each with one lead account and any number of members who don't need their own login."
+            />
+          </section>
+        )}
+
+        {/* STEP 3a — members (singles) */}
+        {step === 3 && !isFamily && (
           <section className="flex flex-col gap-2">
             <p className="px-1 text-sm font-bold text-muted">
               You can always add more people later.
@@ -172,8 +303,47 @@ export default function NewGroupWizard() {
           </section>
         )}
 
-        {/* STEP 3 — trip type */}
-        {step === 3 && (
+        {/* STEP 3b — build your families */}
+        {step === 3 && isFamily && (
+          <section className="flex flex-col gap-4">
+            {families.map((f) => (
+              <FamilyCard
+                key={f.key}
+                family={f}
+                meId={state.meId}
+                person={person}
+                availableLeads={availableLeads}
+                availablePlaceholders={availablePlaceholders}
+                usedLeadIds={new Set(families.filter((x) => x.key !== f.key).map((x) => x.leadId))}
+                usedPlaceholderIds={
+                  new Set(
+                    families
+                      .filter((x) => x.key !== f.key)
+                      .flatMap((x) => x.placeholders.map((p) => p.id)),
+                  )
+                }
+                onChange={(patch) =>
+                  setFamilies((prev) => prev.map((x) => (x.key === f.key ? { ...x, ...patch } : x)))
+                }
+                onRemove={
+                  families.length > 1
+                    ? () => setFamilies((prev) => prev.filter((x) => x.key !== f.key))
+                    : undefined
+                }
+              />
+            ))}
+            <button
+              onClick={() => setFamilies((prev) => [...prev, newFamily(prev.length)])}
+              className="rounded-2xl border border-dashed border-border bg-surface/50 py-3 text-sm font-bold text-primary active:scale-[0.99]"
+            >
+              ＋ Add another family
+            </button>
+            {finalizeError && <p className="px-1 text-xs font-bold text-negative">{finalizeError}</p>}
+          </section>
+        )}
+
+        {/* STEP 4 — trip type */}
+        {step === 4 && (
           <section className="flex flex-col gap-3">
             <p className="px-1 text-sm font-bold text-muted">
               Is this group sharing a hotel / accommodation?
@@ -195,8 +365,8 @@ export default function NewGroupWizard() {
           </section>
         )}
 
-        {/* STEP 4 — booking details */}
-        {step === 4 && (
+        {/* STEP 5 — booking details */}
+        {step === 5 && (
           <section className="flex flex-col gap-5">
             <div className="flex flex-col items-center gap-1 py-1">
               <span className="text-xs font-bold text-muted">Total booking price</span>
@@ -238,8 +408,8 @@ export default function NewGroupWizard() {
           </section>
         )}
 
-        {/* STEP 5 — per-member nights */}
-        {step === 5 && (
+        {/* STEP 6 — per-member nights */}
+        {step === 6 && (
           <section className="flex flex-col gap-3">
             <p className="px-1 text-sm font-bold text-muted">
               Set each person&apos;s nights. The cost splits per night by who&apos;s there.
@@ -279,12 +449,187 @@ export default function NewGroupWizard() {
         )}
 
         <div className="mt-auto pb-4">
-          <Button onClick={next} disabled={!stepValid} size="lg" fullWidth>
-            {step >= maxStep ? "Create group" : "Continue"}
+          <Button onClick={next} disabled={!stepValid || finalizing} size="lg" fullWidth>
+            {finalizing ? "Setting up families…" : step >= maxStep ? "Create group" : "Continue"}
           </Button>
         </div>
       </div>
     </main>
+  );
+}
+
+function FamilyCard({
+  family,
+  meId,
+  person,
+  availableLeads,
+  availablePlaceholders,
+  usedLeadIds,
+  usedPlaceholderIds,
+  onChange,
+  onRemove,
+}: {
+  family: FamilyDraft;
+  meId: string;
+  person: (id: string) => Person;
+  availableLeads: Person[];
+  availablePlaceholders: Person[];
+  usedLeadIds: Set<string | null>;
+  usedPlaceholderIds: Set<string | null>;
+  onChange: (patch: Partial<FamilyDraft>) => void;
+  onRemove?: () => void;
+}) {
+  const [newMemberName, setNewMemberName] = useState("");
+
+  const mePerson = person(meId);
+  const meAlreadyLeadElsewhere = usedLeadIds.has(meId) && family.leadId !== meId;
+  const leadCandidates: Person[] = [
+    ...(meAlreadyLeadElsewhere ? [] : [mePerson]),
+    ...availableLeads.filter((p) => family.leadId === p.id || !usedLeadIds.has(p.id)),
+  ];
+  const placeholderCandidates = availablePlaceholders.filter(
+    (p) => !usedPlaceholderIds.has(p.id) && !family.placeholders.some((fp) => fp.id === p.id),
+  );
+
+  const addPlaceholderName = () => {
+    const trimmed = newMemberName.trim();
+    if (!trimmed) return;
+    onChange({
+      placeholders: [...family.placeholders, { key: crypto.randomUUID(), name: trimmed, id: null }],
+    });
+    setNewMemberName("");
+  };
+  const removePlaceholder = (key: string) =>
+    onChange({ placeholders: family.placeholders.filter((p) => p.key !== key) });
+  const addExistingPlaceholder = (p: Person) =>
+    onChange({
+      placeholders: [...family.placeholders, { key: crypto.randomUUID(), name: p.name, id: p.id }],
+    });
+
+  return (
+    <div className="flex flex-col gap-3 rounded-3xl border border-border bg-surface p-4 shadow-sm">
+      <div className="flex items-center gap-2">
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-surface-2 text-lg">
+          {family.emoji}
+        </span>
+        <input
+          value={family.name}
+          onChange={(e) => onChange({ name: e.target.value })}
+          placeholder="Family name"
+          className="min-w-0 flex-1 rounded-full bg-surface-2 px-4 py-2 text-sm font-extrabold outline-none placeholder:font-semibold placeholder:text-muted"
+        />
+        {onRemove && (
+          <button
+            onClick={onRemove}
+            aria-label="Remove family"
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-muted hover:bg-negative-soft hover:text-negative"
+          >
+            <TrashIcon />
+          </button>
+        )}
+      </div>
+
+      <div className="no-scrollbar flex gap-1.5 overflow-x-auto pb-1">
+        {FAMILY_EMOJIS.map((em) => (
+          <button
+            key={em}
+            onClick={() => onChange({ emoji: em })}
+            className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-base transition-all ${
+              family.emoji === em ? "bg-primary-soft ring-2 ring-primary" : "bg-surface-2"
+            }`}
+          >
+            {em}
+          </button>
+        ))}
+      </div>
+
+      <div>
+        <p className="mb-1.5 px-1 text-xs font-bold text-muted">Lead — has the account</p>
+        {leadCandidates.length === 0 ? (
+          <p className="px-1 text-xs font-semibold text-muted">
+            Add a friend from the Friends tab first to use them as a lead.
+          </p>
+        ) : (
+          <div className="no-scrollbar flex gap-2 overflow-x-auto pb-1">
+            {leadCandidates.map((p) => {
+              const active = family.leadId === p.id;
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => onChange({ leadId: p.id })}
+                  className={`flex shrink-0 items-center gap-2 rounded-full py-1.5 pl-1.5 pr-4 font-bold transition-all ${
+                    active ? "bg-primary text-white shadow-md shadow-primary/25" : "bg-surface-2"
+                  }`}
+                >
+                  <Avatar person={p} size="sm" />
+                  <span className="text-sm">{p.id === meId ? "Me" : p.name}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <p className="mb-1.5 px-1 text-xs font-bold text-muted">Family members — no login needed</p>
+        {family.placeholders.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {family.placeholders.map((ph) => (
+              <span
+                key={ph.key}
+                className="flex items-center gap-1.5 rounded-full bg-primary-soft py-1 pl-3 pr-1 text-xs font-bold text-primary"
+              >
+                {ph.name}
+                <button
+                  onClick={() => removePlaceholder(ph.key)}
+                  aria-label={`Remove ${ph.name}`}
+                  className="grid h-5 w-5 place-items-center rounded-full hover:bg-primary/20"
+                >
+                  ✕
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        {placeholderCandidates.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {placeholderCandidates.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => addExistingPlaceholder(p)}
+                className="flex items-center gap-1.5 rounded-full bg-surface-2 py-1 pl-1 pr-3 text-xs font-bold text-muted"
+              >
+                <Avatar person={p} size="sm" />＋ {p.name}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="flex items-center gap-2">
+          <input
+            placeholder="Add a name…"
+            value={newMemberName}
+            onChange={(e) => setNewMemberName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && addPlaceholderName()}
+            className="min-w-0 flex-1 rounded-full bg-surface-2 px-4 py-2 text-sm font-bold outline-none placeholder:font-semibold placeholder:text-muted"
+          />
+          <button
+            onClick={addPlaceholderName}
+            disabled={!newMemberName.trim()}
+            className="rounded-full bg-primary px-4 py-2 text-sm font-bold text-white active:scale-95 disabled:opacity-40"
+          >
+            Add
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    </svg>
   );
 }
 

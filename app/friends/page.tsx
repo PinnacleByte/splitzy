@@ -60,7 +60,9 @@ export default function FriendsPage() {
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-extrabold">{p.name}</p>
                     <div className="mt-1 flex flex-wrap gap-1">
-                      {p.tags.length ? (
+                      {p.isPlaceholder ? (
+                        <span className="text-[11px] font-semibold text-muted">👪 family member</span>
+                      ) : p.tags.length ? (
                         p.tags.map((t) => (
                           <span key={t} className="text-[11px] font-bold text-muted">
                             {tagEmoji(t)}
@@ -89,7 +91,12 @@ export default function FriendsPage() {
 
                 {isOpen && (
                   <div className="mt-3 border-t border-border pt-3">
-                    {state.connectionIds.includes(p.id) ? (
+                    {p.isPlaceholder ? (
+                      <p className="text-xs font-semibold text-muted">
+                        👪 A family member with no login of their own — added via the &quot;Family
+                        trip&quot; option when creating a group.
+                      </p>
+                    ) : state.connectionIds.includes(p.id) ? (
                       <>
                         <p className="mb-2 text-xs font-bold text-muted">Profile — used to auto-split expenses</p>
                         <div className="flex flex-wrap gap-1.5">

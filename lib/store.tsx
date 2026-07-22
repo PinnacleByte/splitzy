@@ -31,12 +31,19 @@ const EMPTY_STATE: AppState = {
   settlements: [],
 };
 
-type ProfileRow = { id: string; name: string; color: string; tags: string[] | null };
+type ProfileRow = {
+  id: string;
+  name: string;
+  color: string;
+  tags: string[] | null;
+  is_placeholder: boolean | null;
+};
 const toPerson = (row: ProfileRow): Person => ({
   id: row.id,
   name: row.name,
   color: row.color,
   tags: row.tags ?? [],
+  isPlaceholder: row.is_placeholder ?? false,
 });
 
 /** Supabase calls resolve (not reject) on RLS/DB errors — throw explicitly
@@ -100,6 +107,9 @@ type Store = {
     emoji: string;
     memberIds: string[];
     stay?: GroupStay;
+    /** pre-populate households at creation time (e.g. a "family trip" wizard
+     *  where each family is its own unit from the start) */
+    households?: { name: string; emoji: string; memberIds: string[] }[];
   }) => Group;
   /** rename / re-emoji a group */
   updateGroup: (groupId: string, patch: { name?: string; emoji?: string }) => void;
@@ -380,30 +390,70 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setState(EMPTY_STATE);
     };
 
-    const addGroup: Store["addGroup"] = ({ name, emoji, memberIds, stay }) => {
+    const addGroup: Store["addGroup"] = ({ name, emoji, memberIds, stay, households }) => {
       const id = crypto.randomUUID();
       const allMemberIds = Array.from(new Set([state.meId, ...memberIds]));
+      const householdRecords: Household[] = (households ?? []).map((h) => ({
+        id: crypto.randomUUID(),
+        name: h.name,
+        emoji: h.emoji,
+        memberIds: h.memberIds,
+      }));
+      const householdIdFor = (pid: string) =>
+        householdRecords.find((h) => h.memberIds.includes(pid))?.id ?? null;
+
       const group: Group = {
         id,
         name,
         emoji,
         memberIds: allMemberIds,
         createdAt: Date.now(),
+        ...(householdRecords.length ? { households: householdRecords } : {}),
         ...(stay ? { stay } : {}),
       };
       setState((s) => ({ ...s, groups: [group, ...s.groups] }));
 
       withRetry(async () => {
         unwrap(await supabase.from("groups").insert({ id, name, emoji, created_by: state.meId }));
+        // The creator's own row must exist before anything else: households_all
+        // and the "others" group_members insert below both require
+        // is_group_member(group_id), which is false until this row exists (the
+        // same chicken-and-egg is_group_creator already solves for this exact
+        // insert). household_id can't be set yet either — households
+        // themselves don't exist until the next step — so it's patched in
+        // afterward if the creator belongs to one.
         unwrap(
-          await supabase.from("group_members").insert({ group_id: id, person_id: state.meId }),
+          await supabase
+            .from("group_members")
+            .insert({ group_id: id, person_id: state.meId, household_id: null }),
         );
+        if (householdRecords.length) {
+          unwrap(
+            await supabase.from("households").insert(
+              householdRecords.map((h) => ({ id: h.id, group_id: id, name: h.name, emoji: h.emoji })),
+            ),
+          );
+          const myHousehold = householdIdFor(state.meId);
+          if (myHousehold) {
+            unwrap(
+              await supabase
+                .from("group_members")
+                .update({ household_id: myHousehold })
+                .eq("group_id", id)
+                .eq("person_id", state.meId),
+            );
+          }
+        }
         const others = allMemberIds.filter((pid) => pid !== state.meId);
         if (others.length) {
           unwrap(
-            await supabase
-              .from("group_members")
-              .insert(others.map((person_id) => ({ group_id: id, person_id }))),
+            await supabase.from("group_members").insert(
+              others.map((person_id) => ({
+                group_id: id,
+                person_id,
+                household_id: householdIdFor(person_id),
+              })),
+            ),
           );
         }
         if (stay) {

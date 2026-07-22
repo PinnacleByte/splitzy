@@ -17,15 +17,31 @@ drop table if exists invites;
 -- Tables
 -- =========================================================================
 
--- One row per Splitzy account. id == auth.users.id. Auto-created by the
--- handle_new_user trigger below whenever someone signs up (see /login).
+-- One row per Splitzy account. For a real account, id == auth.users.id,
+-- auto-created by the handle_new_user trigger below whenever someone signs up
+-- (see /login). A "placeholder" row (is_placeholder = true) represents a
+-- family member with no login of their own — e.g. the other members of a
+-- family trip whose one "lead" account manages them (lib/accountActions.ts'
+-- createPlaceholderPerson). Its id is a freshly generated uuid with no
+-- corresponding auth.users row, which is why the FK below is relaxed rather
+-- than required.
 create table if not exists profiles (
-  id uuid primary key references auth.users (id) on delete cascade,
+  id uuid primary key,
   name text not null default '',
   color text not null default 'from-sky-400 to-cyan-400',
   tags text[] not null default '{}',
+  is_placeholder boolean not null default false,
+  -- who manages this placeholder (null for real accounts).
+  owner_id uuid references profiles (id) on delete cascade,
   created_at timestamptz not null default now()
 );
+
+-- Existing installs: this table predates is_placeholder/owner_id, and its id
+-- column used to require a matching auth.users row — relax that so
+-- placeholder profiles (no login) can exist alongside real ones.
+alter table profiles drop constraint if exists profiles_id_fkey;
+alter table profiles add column if not exists is_placeholder boolean not null default false;
+alter table profiles add column if not exists owner_id uuid references profiles (id) on delete cascade;
 
 -- Symmetric friend graph: both (a,b) and (b,a) rows are written together
 -- by addFriendAccount() (lib/accountActions.ts, via the service-role client).
@@ -218,7 +234,9 @@ alter table expenses enable row level security;
 alter table expense_splits enable row level security;
 alter table settlements enable row level security;
 
--- profiles: visible to yourself, your connections, and fellow group members.
+-- profiles: visible to yourself, your connections, fellow group members, and
+-- (belt-and-suspenders, since createPlaceholderPerson also connects the two)
+-- whoever owns a placeholder profile.
 -- NOTE (known v1 limitation): update is allowed for connections too, not just
 -- self, because the Friends page lets you tag a friend's diet/smoker/drinker
 -- profile for auto-split purposes — there's no per-viewer override, so two
@@ -228,6 +246,7 @@ create policy "profiles_select" on profiles for select
   using (
     id = auth.uid()
     or is_connected(id)
+    or owner_id = auth.uid()
     or exists (
       select 1 from group_members gm1
       join group_members gm2 on gm1.group_id = gm2.group_id
@@ -237,8 +256,8 @@ create policy "profiles_select" on profiles for select
 
 drop policy if exists "profiles_update" on profiles;
 create policy "profiles_update" on profiles for update
-  using (id = auth.uid() or is_connected(id))
-  with check (id = auth.uid() or is_connected(id));
+  using (id = auth.uid() or is_connected(id) or owner_id = auth.uid())
+  with check (id = auth.uid() or is_connected(id) or owner_id = auth.uid());
 
 -- connections: readable by either side; writes only via the service-role
 -- client in addFriendAccount() (lib/accountActions.ts), which bypasses RLS.

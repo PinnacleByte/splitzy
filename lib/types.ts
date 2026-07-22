@@ -5,6 +5,9 @@ export type Person = {
   color: string;
   /** free-form labels like "veg", "smoker" for quick participant selection */
   tags: string[];
+  /** true for a family member with no login of their own, managed by whoever
+   *  created them (lib/accountActions.ts' createPlaceholderPerson) */
+  isPlaceholder?: boolean;
 };
 
 export type Split = {
