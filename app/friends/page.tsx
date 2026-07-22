@@ -89,25 +89,49 @@ export default function FriendsPage() {
 
                 {isOpen && (
                   <div className="mt-3 border-t border-border pt-3">
-                    <p className="mb-2 text-xs font-bold text-muted">Profile — used to auto-split expenses</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {SUGGESTED_TAGS.map((t) => {
-                        const on = p.tags.includes(t);
-                        return (
-                          <button
-                            key={t}
-                            onClick={() => toggleTag(p.id, t)}
-                            className={`rounded-full px-3 py-1 text-xs font-bold transition-all ${
-                              on
-                                ? "bg-primary-soft text-primary ring-1 ring-primary/30"
-                                : "bg-surface-2 text-muted opacity-70"
-                            }`}
-                          >
-                            {tagEmoji(t)} {tagLabel(t)}
-                          </button>
-                        );
-                      })}
-                    </div>
+                    {state.connectionIds.includes(p.id) ? (
+                      <>
+                        <p className="mb-2 text-xs font-bold text-muted">Profile — used to auto-split expenses</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {SUGGESTED_TAGS.map((t) => {
+                            const on = p.tags.includes(t);
+                            return (
+                              <button
+                                key={t}
+                                onClick={() => toggleTag(p.id, t)}
+                                className={`rounded-full px-3 py-1 text-xs font-bold transition-all ${
+                                  on
+                                    ? "bg-primary-soft text-primary ring-1 ring-primary/30"
+                                    : "bg-surface-2 text-muted opacity-70"
+                                }`}
+                              >
+                                {tagEmoji(t)} {tagLabel(t)}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <p className="mb-2 text-xs font-bold text-muted">
+                          Shared with you through a group — add them as a friend to edit their profile
+                        </p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {p.tags.length ? (
+                            p.tags.map((t) => (
+                              <span
+                                key={t}
+                                className="rounded-full bg-surface-2 px-3 py-1 text-xs font-bold text-muted"
+                              >
+                                {tagEmoji(t)} {tagLabel(t)}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-xs font-semibold text-muted">no profile set</span>
+                          )}
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
               </li>

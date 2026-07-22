@@ -126,6 +126,14 @@ export type AppState = {
   meId: string;
   meEmail: string;
   people: Person[];
+  /**
+   * ids of your direct connections (the symmetric `connections` table) —
+   * a subset of `people`. `people` also includes anyone who merely shares a
+   * group with you (visible so their name/avatar render instead of a
+   * placeholder), but only connections can have their profile tags edited
+   * (see supabase/schema.sql's `profiles_update` policy).
+   */
+  connectionIds: string[];
   groups: Group[];
   expenses: Expense[];
   settlements: Settlement[];

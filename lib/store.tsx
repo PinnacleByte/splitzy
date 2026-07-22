@@ -25,6 +25,7 @@ const EMPTY_STATE: AppState = {
   meId: "",
   meEmail: "",
   people: [],
+  connectionIds: [],
   groups: [],
   expenses: [],
   settlements: [],
@@ -176,9 +177,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const [{ data: me }, { data: conns }] = await Promise.all([
+    const [{ data: me }, { data: conns }, { data: memberships }] = await Promise.all([
       supabase.from("profiles").select("*").eq("id", user.id).maybeSingle(),
       supabase.from("connections").select("friend_id").eq("user_id", user.id),
+      supabase
+        .from("group_members")
+        .select(
+          `group:groups(
+            id, name, emoji, created_at,
+            group_members(person_id, household_id),
+            households(id, name, emoji),
+            group_stays(check_in, check_out, price, paid_by),
+            stays(person_id, from, to),
+            expenses(id, description, emoji, amount, paid_by, config, category, created_at,
+              expense_splits(person_id, amount)),
+            settlements(id, from_person, to_person, amount, created_at)
+          )`,
+        )
+        .eq("person_id", user.id),
     ]);
     if (!me) {
       // profile row not created yet (trigger race right after signup) — retry on next event
@@ -187,31 +203,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
 
     const friendIds = (conns ?? []).map((c) => c.friend_id);
-    const { data: friendProfiles } = friendIds.length
-      ? await supabase.from("profiles").select("*").in("id", friendIds)
-      : { data: [] as ProfileRow[] };
-
-    const people = [me as ProfileRow, ...((friendProfiles as ProfileRow[]) ?? [])].map(toPerson);
-
-    const { data: memberships } = await supabase
-      .from("group_members")
-      .select(
-        `group:groups(
-          id, name, emoji, created_at,
-          group_members(person_id, household_id),
-          households(id, name, emoji),
-          group_stays(check_in, check_out, price, paid_by),
-          stays(person_id, from, to),
-          expenses(id, description, emoji, amount, paid_by, config, category, created_at,
-            expense_splits(person_id, amount)),
-          settlements(id, from_person, to_person, amount, created_at)
-        )`,
-      )
-      .eq("person_id", user.id);
 
     const groups: Group[] = [];
     const expenses: Expense[] = [];
     const settlements: Settlement[] = [];
+
+    // Everyone who shares a group with me, across every group — RLS already
+    // permits viewing their profile (see the "fellow group members" clause in
+    // profiles_select, supabase/schema.sql), but until now this only ever
+    // fetched direct connections' profiles, so a co-member who wasn't also a
+    // direct friend rendered as a fallback "Unknown" avatar and never showed
+    // up in the Friends list, even though they're actively splitting bills.
+    const coMemberIds = new Set<string>();
 
     for (const row of (memberships ?? []) as unknown as { group: Record<string, unknown> | null }[]) {
       const g = row.group;
@@ -234,6 +237,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         emoji: h.emoji,
         memberIds: memberRows.filter((m) => m.household_id === h.id).map((m) => m.person_id),
       }));
+
+      for (const m of memberRows) coMemberIds.add(m.person_id);
 
       groups.push({
         id: g.id as string,
@@ -289,7 +294,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    setState({ meId: user.id, meEmail: user.email ?? "", people, groups, expenses, settlements });
+    const otherIds = Array.from(new Set([...friendIds, ...coMemberIds])).filter(
+      (id) => id !== user.id,
+    );
+    const { data: otherProfiles } = otherIds.length
+      ? await supabase.from("profiles").select("*").in("id", otherIds)
+      : { data: [] as ProfileRow[] };
+
+    const people = [me as ProfileRow, ...((otherProfiles as ProfileRow[]) ?? [])].map(toPerson);
+
+    setState({
+      meId: user.id,
+      meEmail: user.email ?? "",
+      people,
+      connectionIds: friendIds,
+      groups,
+      expenses,
+      settlements,
+    });
     setHydrated(true);
   }, [supabase]);
 
