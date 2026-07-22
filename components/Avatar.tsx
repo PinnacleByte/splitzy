@@ -18,7 +18,7 @@ export function Avatar({
 }) {
   return (
     <span
-      className={`inline-grid place-items-center rounded-full bg-gradient-to-br ${person.color} ${sizes[size]} font-bold text-white shadow-sm ${
+      className={`inline-grid place-items-center rounded-full bg-linear-to-br ${person.color} ${sizes[size]} font-bold text-white shadow-sm ${
         ring ? "ring-2 ring-surface" : ""
       }`}
       title={person.name}

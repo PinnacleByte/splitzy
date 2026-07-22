@@ -27,7 +27,7 @@ export default function HomePage() {
       </header>
 
       {/* Overall balance hero */}
-      <section className="animate-pop rounded-4xl bg-gradient-to-br from-primary to-primary-strong p-6 text-white shadow-[var(--shadow)]">
+      <section className="animate-pop rounded-4xl bg-linear-to-br from-primary to-primary-strong p-6 text-white shadow-(--shadow)">
         <p className="text-sm font-semibold text-white/80">
           {net === 0
             ? "You're all settled up 🎉"
@@ -40,7 +40,7 @@ export default function HomePage() {
           <ButtonLink
             href="/new"
             variant="ghost"
-            className="!bg-white/15 !text-white backdrop-blur hover:!bg-white/25"
+            className="bg-white/15! text-white! backdrop-blur hover:bg-white/25!"
           >
             <PlusIcon /> New group
           </ButtonLink>

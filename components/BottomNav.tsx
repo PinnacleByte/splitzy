@@ -41,7 +41,7 @@ export function BottomNav() {
             <button
               onClick={() => setSheet(true)}
               aria-label="Add"
-              className="-mt-8 grid h-16 w-16 place-items-center rounded-full bg-gradient-to-br from-primary to-primary-strong text-white shadow-lg shadow-primary/40 ring-4 ring-bg transition-transform active:scale-90"
+              className="-mt-8 grid h-16 w-16 place-items-center rounded-full bg-linear-to-br from-primary to-primary-strong text-white shadow-lg shadow-primary/40 ring-4 ring-bg transition-transform active:scale-90"
             >
               <PlusIcon />
             </button>
@@ -98,7 +98,7 @@ function AddSheet({ onClose }: { onClose: () => void }) {
         <Link
           href="/new"
           onClick={onClose}
-          className="flex items-center gap-3 rounded-3xl bg-gradient-to-br from-primary to-primary-strong p-4 text-white shadow-md shadow-primary/25 active:scale-[0.99]"
+          className="flex items-center gap-3 rounded-3xl bg-linear-to-br from-primary to-primary-strong p-4 text-white shadow-md shadow-primary/25 active:scale-[0.99]"
         >
           <span className="grid h-11 w-11 place-items-center rounded-2xl bg-white/20 text-2xl">✨</span>
           <div className="flex-1">

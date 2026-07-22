@@ -58,7 +58,7 @@ export default function SettlePage() {
       </header>
 
       <div className="flex flex-col gap-5 px-5 pt-6">
-        <div className="rounded-4xl bg-gradient-to-br from-primary to-primary-strong p-5 text-white shadow-[var(--shadow)]">
+        <div className="rounded-4xl bg-linear-to-br from-primary to-primary-strong p-5 text-white shadow-(--shadow)">
           <p className="text-sm font-semibold text-white/85">{group.emoji} {group.name}</p>
           <p className="mt-1 text-lg font-black">
             {transfers.length === 0

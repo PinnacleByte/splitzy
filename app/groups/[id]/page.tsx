@@ -129,12 +129,12 @@ export default function GroupPage() {
 
         {/* Your balance */}
         <section
-          className={`animate-pop rounded-4xl p-5 text-white shadow-[var(--shadow)] ${
+          className={`animate-pop rounded-4xl p-5 text-white shadow-(--shadow) ${
             Math.abs(myNet) < 0.005
-              ? "bg-gradient-to-br from-slate-500 to-slate-600"
+              ? "bg-linear-to-br from-slate-500 to-slate-600"
               : myNet > 0
-                ? "bg-gradient-to-br from-positive to-emerald-500"
-                : "bg-gradient-to-br from-negative to-rose-500"
+                ? "bg-linear-to-br from-positive to-emerald-500"
+                : "bg-linear-to-br from-negative to-rose-500"
           }`}
         >
           <p className="text-sm font-semibold text-white/85">
@@ -333,7 +333,7 @@ function MembersRow({ group, net }: { group: Group; net: Record<string, number> 
         <span className="flex-1 text-sm font-bold text-muted">
           {group.memberIds.length} members
         </span>
-        <ButtonLink href={`/groups/${group.id}/stay`} variant="soft" className="!h-9 !px-4 text-xs">
+        <ButtonLink href={`/groups/${group.id}/stay`} variant="soft" className="h-9! px-4! text-xs">
           + Add / edit stay
         </ButtonLink>
       </div>
@@ -585,7 +585,7 @@ function BalancesTab({
         <div className="flex items-center justify-between px-1">
           <h3 className="font-extrabold">{autoBalance ? "Suggested settle-ups" : "Who owes whom"}</h3>
           {simplified.length > 0 && (
-            <ButtonLink href={`/groups/${groupId}/settle`} variant="soft" size="md" className="!h-9 !px-4 text-xs">
+            <ButtonLink href={`/groups/${groupId}/settle`} variant="soft" size="md" className="h-9! px-4! text-xs">
               Settle up
             </ButtonLink>
           )}

@@ -57,7 +57,7 @@ export default function InsightsPage() {
       <h1 className="text-2xl font-black">Insights</h1>
 
       {/* hero */}
-      <section className="rounded-4xl bg-gradient-to-br from-primary to-primary-strong p-6 text-white shadow-[var(--shadow)]">
+      <section className="rounded-4xl bg-linear-to-br from-primary to-primary-strong p-6 text-white shadow-(--shadow)">
         <p className="text-sm font-semibold text-white/80">
           {net >= 0 ? "Overall, you are owed" : "Overall, you owe"}
         </p>
@@ -129,7 +129,7 @@ function BarList({
             </div>
             <div className="h-2.5 overflow-hidden rounded-full bg-surface-2">
               <div
-                className="h-full rounded-full bg-gradient-to-r from-primary to-primary-strong"
+                className="h-full rounded-full bg-linear-to-r from-primary to-primary-strong"
                 style={{ width: `${Math.max(6, (x.total / max) * 100)}%` }}
               />
             </div>

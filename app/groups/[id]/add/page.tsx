@@ -241,7 +241,7 @@ function AddExpenseWizard({
 
       <div className="mx-5 mt-3 h-1.5 overflow-hidden rounded-full bg-surface-2">
         <div
-          className="h-full rounded-full bg-gradient-to-r from-primary to-primary-strong transition-all"
+          className="h-full rounded-full bg-linear-to-r from-primary to-primary-strong transition-all"
           style={{ width: `${(step / 3) * 100}%` }}
         />
       </div>

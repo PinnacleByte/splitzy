@@ -95,7 +95,7 @@ function StayEditor({ group }: { group: Group }) {
 
       <div className="flex flex-col gap-5 px-5 pt-5">
         {/* summary */}
-        <section className="rounded-4xl bg-gradient-to-br from-primary to-primary-strong p-5 text-white shadow-[var(--shadow)]">
+        <section className="rounded-4xl bg-linear-to-br from-primary to-primary-strong p-5 text-white shadow-(--shadow)">
           <p className="text-sm font-semibold text-white/85">
             {group.emoji} {group.name}
           </p>

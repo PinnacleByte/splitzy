@@ -99,7 +99,7 @@ export default function NewGroupWizard() {
       {/* progress bar */}
       <div className="mx-5 mt-3 h-1.5 overflow-hidden rounded-full bg-surface-2">
         <div
-          className="h-full rounded-full bg-gradient-to-r from-primary to-primary-strong transition-all"
+          className="h-full rounded-full bg-linear-to-r from-primary to-primary-strong transition-all"
           style={{ width: `${(step / maxStep) * 100}%` }}
         />
       </div>
@@ -108,7 +108,7 @@ export default function NewGroupWizard() {
         {/* STEP 1 — name + emoji */}
         {step === 1 && (
           <div className="flex flex-col items-center gap-4">
-            <div className="grid h-24 w-24 place-items-center rounded-4xl bg-surface text-5xl shadow-[var(--shadow)]">
+            <div className="grid h-24 w-24 place-items-center rounded-4xl bg-surface text-5xl shadow-(--shadow)">
               {emoji}
             </div>
             <input
