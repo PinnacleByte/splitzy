@@ -19,7 +19,7 @@ import type {
   Settlement,
 } from "./types";
 import { createClient } from "./supabase/client";
-import { signUpAccount } from "./accountActions";
+import { signUpAccount, removeFriendAccount } from "./accountActions";
 
 const EMPTY_STATE: AppState = {
   meId: "",
@@ -143,6 +143,11 @@ type Store = {
   deleteHousehold: (groupId: string, householdId: string) => void;
   /** remove a member from a group (also works to leave a group yourself) */
   removeMemberFromGroup: (groupId: string, personId: string) => void;
+  /** drop someone from your Friends list. A real account is just unfriended
+   *  (shared groups/balances survive; they stay visible if you still share a
+   *  group). A placeholder you own is deleted outright, but only if they carry
+   *  no expense history — see removeFriendAccount in lib/accountActions.ts. */
+  removeFriend: (personId: string) => Promise<{ error: string | null }>;
   updateStay: (groupId: string, patch: Partial<GroupStay>) => void;
   setMemberStay: (
     groupId: string,
@@ -873,6 +878,49 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       });
     };
 
+    const removeFriend: Store["removeFriend"] = async (personId) => {
+      const target = state.people.find((p) => p.id === personId);
+      const deletingProfile = target?.isPlaceholder ?? false;
+      // A real account you still share a group with stays in `people` — RLS
+      // still exposes their profile and the Friends page renders them as a
+      // read-only "shared through a group" entry. Only drop them from the list
+      // outright when nothing else keeps them visible.
+      const stillVisible =
+        !deletingProfile && state.groups.some((g) => g.memberIds.includes(personId));
+
+      setState((s) => ({
+        ...s,
+        connectionIds: s.connectionIds.filter((id) => id !== personId),
+        people: stillVisible ? s.people : s.people.filter((p) => p.id !== personId),
+        // deleting a placeholder cascades their group_members rows away
+        groups: deletingProfile
+          ? s.groups.map((g) => ({
+              ...g,
+              memberIds: g.memberIds.filter((m) => m !== personId),
+              ...(g.households?.length
+                ? {
+                    households: g.households.map((h) => ({
+                      ...h,
+                      memberIds: h.memberIds.filter((m) => m !== personId),
+                    })),
+                  }
+                : {}),
+            }))
+          : s.groups,
+      }));
+
+      const { error } = await removeFriendAccount({ personId });
+      if (error) {
+        // Resync from the server rather than hand-reconstructing the rollback:
+        // this touches people/connections/groups/households at once, and the
+        // action may have partially applied.
+        await load();
+        pushError("remove that person", new Error(error));
+        return { error };
+      }
+      return { error: null };
+    };
+
     const updateMyProfile: Store["updateMyProfile"] = (patch) => {
       const prior = person(state.meId);
       const revert: { name?: string } = {};
@@ -1066,6 +1114,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setMemberHousehold,
       deleteHousehold,
       removeMemberFromGroup,
+      removeFriend,
       updateStay,
       setMemberStay,
       addExpense,

@@ -141,6 +141,104 @@ async function connectFriend(
   return { error: null, status };
 }
 
+/**
+ * Remove someone from your Friends list. Two very different operations behind
+ * one intent, picked by what the target is:
+ *
+ *  - a real account → delete only the two symmetric `connections` rows. Their
+ *    profile, your shared groups, and every expense/balance stay untouched;
+ *    `connections` is referenced by nothing else. If you still share a group
+ *    they remain visible (profiles_select's "fellow group members" clause) and
+ *    the Friends page downgrades them to the read-only "shared through a group"
+ *    card — deliberate, not a bug.
+ *  - a placeholder you own → delete the profiles row outright, since a
+ *    placeholder's only tether to you IS the connection; unfriending one would
+ *    strand an unreachable orphan. Guarded: refused if they appear in any
+ *    expense split, paid any expense, or are party to a settlement, because
+ *    expense_splits.person_id is ON DELETE CASCADE — deleting a profile with
+ *    history would silently drop their split rows and leave those expenses no
+ *    longer summing to their own amount. (expenses.paid_by has no cascade, so
+ *    that case would instead blow up as an FK error.) Deleting an unused
+ *    placeholder is safe: only group_members and connections cascade away.
+ *
+ * Needs the service-role client because `connections` has no delete policy —
+ * same reason the inserts above use it.
+ */
+export async function removeFriendAccount(data: {
+  personId: string;
+}): Promise<{ error: string | null; deletedProfile?: boolean }> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { error: "You must be signed in to remove a friend." };
+  }
+  if (data.personId === user.id) {
+    return { error: "You can't remove yourself." };
+  }
+
+  const admin = createAdminClient();
+
+  const { data: profile, error: profileError } = await admin
+    .from("profiles")
+    .select("is_placeholder, owner_id")
+    .eq("id", data.personId)
+    .maybeSingle();
+  if (profileError) return { error: profileError.message };
+  if (!profile) return { error: "That person no longer exists." };
+
+  const isMyPlaceholder = profile.is_placeholder && profile.owner_id === user.id;
+
+  if (isMyPlaceholder) {
+    const blocker = await placeholderUsage(admin, data.personId);
+    if (blocker) return { error: blocker };
+
+    const { error } = await admin.from("profiles").delete().eq("id", data.personId);
+    if (error) return { error: error.message };
+    return { error: null, deletedProfile: true };
+  }
+
+  // Real account (or someone else's placeholder): just sever the friendship.
+  const { error } = await admin
+    .from("connections")
+    .delete()
+    .or(
+      `and(user_id.eq.${user.id},friend_id.eq.${data.personId}),` +
+        `and(user_id.eq.${data.personId},friend_id.eq.${user.id})`,
+    );
+  if (error) return { error: error.message };
+  return { error: null, deletedProfile: false };
+}
+
+/**
+ * Returns a human-readable reason a placeholder can't be deleted, or null if
+ * they carry no financial history and are safe to remove. See removeFriendAccount
+ * for why deleting one with history would corrupt data rather than just fail.
+ */
+async function placeholderUsage(
+  admin: ReturnType<typeof createAdminClient>,
+  personId: string,
+): Promise<string | null> {
+  const [splits, paid, settled] = await Promise.all([
+    admin
+      .from("expense_splits")
+      .select("expense_id", { count: "exact", head: true })
+      .eq("person_id", personId),
+    admin.from("expenses").select("id", { count: "exact", head: true }).eq("paid_by", personId),
+    admin
+      .from("settlements")
+      .select("id", { count: "exact", head: true })
+      .or(`from_person.eq.${personId},to_person.eq.${personId}`),
+  ]);
+
+  if ((splits.count ?? 0) > 0 || (paid.count ?? 0) > 0 || (settled.count ?? 0) > 0) {
+    return "They're part of existing expenses, so removing them would break those bills. Delete or reassign their expenses first.";
+  }
+  return null;
+}
+
 // mirrors handle_new_user()'s palette (supabase/schema.sql) for visual consistency
 const PLACEHOLDER_PALETTE = [
   "from-sky-400 to-cyan-400",

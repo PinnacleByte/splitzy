@@ -9,8 +9,26 @@ import { Avatar } from "@/components/Avatar";
 import { AddFriendForm } from "@/components/AddFriendForm";
 
 export default function FriendsPage() {
-  const { state, toggleTag } = useStore();
+  const { state, toggleTag, removeFriend } = useStore();
   const [open, setOpen] = useState<string | null>(null);
+  // id of the person whose "remove" confirm step is showing
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [removing, setRemoving] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+
+  const closeConfirm = () => {
+    setConfirming(null);
+    setRemoveError(null);
+  };
+
+  const doRemove = async (personId: string) => {
+    setRemoving(true);
+    setRemoveError(null);
+    const { error } = await removeFriend(personId);
+    setRemoving(false);
+    if (error) setRemoveError(error);
+    else closeConfirm();
+  };
 
   const friends = state.people
     .filter((p) => p.id !== state.meId)
@@ -50,10 +68,16 @@ export default function FriendsPage() {
             const settled = Math.abs(net) < 0.005;
             const owedYou = net > 0;
             const isOpen = open === p.id;
+            // unfriending someone you still share a group with doesn't hide
+            // them — they stay visible via the group, read-only
+            const sharedGroups = state.groups.filter((g) => g.memberIds.includes(p.id));
             return (
               <li key={p.id} className="rounded-3xl border border-border bg-surface p-4 shadow-sm">
                 <button
-                  onClick={() => setOpen(isOpen ? null : p.id)}
+                  onClick={() => {
+                    setOpen(isOpen ? null : p.id);
+                    closeConfirm();
+                  }}
                   className="flex w-full items-center gap-3 text-left"
                 >
                   <Avatar person={p} size="md" />
@@ -139,6 +163,66 @@ export default function FriendsPage() {
                         </div>
                       </>
                     )}
+
+                    {/* Only a real connection can be removed — someone visible
+                        purely through a shared group isn't on your list to drop. */}
+                    {state.connectionIds.includes(p.id) &&
+                      (confirming === p.id ? (
+                        <div className="mt-3 flex flex-col gap-2 border-t border-border pt-3">
+                          <p className="text-xs font-black">Remove {p.name}?</p>
+                          {!settled && (
+                            <p className="text-xs font-bold text-negative">
+                              ⚠️{" "}
+                              {owedYou
+                                ? `${p.name} owes you ${money(Math.abs(net))}`
+                                : `You owe ${p.name} ${money(Math.abs(net))}`}{" "}
+                              — that balance stays in your shared groups.
+                            </p>
+                          )}
+                          <p className="text-xs font-semibold text-muted">
+                            {p.isPlaceholder
+                              ? "They have no login of their own, so this deletes them permanently. Only possible while they aren't part of any expense."
+                              : "Their account, your shared groups and all expense history stay exactly as they are."}
+                          </p>
+                          {!p.isPlaceholder && sharedGroups.length > 0 && (
+                            <p className="text-xs font-semibold text-muted">
+                              You still share {sharedGroups.length}{" "}
+                              {sharedGroups.length === 1 ? "group" : "groups"} with them, so
+                              they&apos;ll stay listed here — just without profile editing.
+                            </p>
+                          )}
+                          {removeError && (
+                            <p className="text-xs font-bold text-negative">{removeError}</p>
+                          )}
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => doRemove(p.id)}
+                              disabled={removing}
+                              className="rounded-full bg-negative px-4 py-1.5 text-xs font-black text-white active:scale-95 disabled:opacity-50"
+                            >
+                              {removing ? "Removing…" : "Remove"}
+                            </button>
+                            <button
+                              onClick={closeConfirm}
+                              className="px-2 text-xs font-bold text-muted active:scale-95"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-3 border-t border-border pt-3">
+                          <button
+                            onClick={() => {
+                              setConfirming(p.id);
+                              setRemoveError(null);
+                            }}
+                            className="text-xs font-bold text-negative active:scale-95"
+                          >
+                            {p.isPlaceholder ? "Remove family member" : "Remove friend"}
+                          </button>
+                        </div>
+                      ))}
                   </div>
                 )}
               </li>

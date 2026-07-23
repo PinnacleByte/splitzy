@@ -260,7 +260,11 @@ create policy "profiles_update" on profiles for update
   with check (id = auth.uid() or is_connected(id) or owner_id = auth.uid());
 
 -- connections: readable by either side; writes only via the service-role
--- client in addFriendAccount() (lib/accountActions.ts), which bypasses RLS.
+-- client in addFriendAccount() / removeFriendAccount() (lib/accountActions.ts),
+-- which bypass RLS. Deletes stay server-side on purpose even though a policy
+-- could express them: removeFriendAccount also has to refuse deleting a
+-- placeholder who carries expense history (expense_splits cascades), and that
+-- guard can't be enforced from the client.
 drop policy if exists "connections_select" on connections;
 create policy "connections_select" on connections for select
   using (user_id = auth.uid() or friend_id = auth.uid());
